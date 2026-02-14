@@ -6,12 +6,19 @@ import { OrbitControls, Stars } from "@react-three/drei"
 import * as THREE from "three"
 
 import { cn } from "@/lib/utils"
+import { MovingSatellite } from "@/components/moving-satellite"
 
 const EARTH_RADIUS_M = 6_378_137
 const SCALE = 1 / EARTH_RADIUS_M
 
 interface ApiOrbitalObject {
   position: [number, number, number]
+}
+
+interface TrajectoryData {
+  times: number[]
+  positions: number[][]
+  velocities: number[][]
 }
 
 interface MockOrbit {
@@ -177,7 +184,7 @@ function MockObjects({ count = 2400 }: { count?: number }) {
   )
 }
 
-function Scene({ positions }: { positions: THREE.Vector3[] }) {
+function Scene({ positions, trajectory }: { positions: THREE.Vector3[], trajectory: TrajectoryData | null }) {
   const { camera } = useThree()
 
   useEffect(() => {
@@ -192,6 +199,7 @@ function Scene({ positions }: { positions: THREE.Vector3[] }) {
       <Earth />
       <Atmosphere />
       {positions.length > 0 ? <StaticObjects positions={positions} /> : <MockObjects />}
+      <MovingSatellite trajectory={trajectory} color="#ff3333" size={0.025} speed={15} />
       <OrbitControls
         enablePan
         enableZoom
@@ -219,14 +227,15 @@ interface GlobeViewProps {
 export function GlobeView({ compacted = false }: GlobeViewProps) {
   const [positions, setPositions] = useState<THREE.Vector3[]>([])
   const [mode, setMode] = useState<"live" | "mock">("mock")
+  const [trajectory, setTrajectory] = useState<TrajectoryData | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api"
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000"
 
     const load = async () => {
       try {
-        const response = await fetch(`${apiBase}/objects?limit=3500`, { signal: controller.signal })
+        const response = await fetch(`${apiBase}/api/objects?limit=3500`, { signal: controller.signal })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const objects = (await response.json()) as ApiOrbitalObject[]
@@ -240,12 +249,35 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
           return
         }
         setMode("mock")
-      } catch {
+      } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === "AbortError") return
         setMode("mock")
       }
     }
 
+    const loadTrajectory = async () => {
+      try {
+        console.log("🚀 Fetching satellite trajectory...")
+        const response = await fetch(`${apiBase}/api/satellite-demo/iss-trajectory?duration=5400&dt=30`, {
+          signal: controller.signal,
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const data = (await response.json()) as TrajectoryData
+        console.log("✅ Trajectory loaded successfully:", {
+          points: data.positions.length,
+          duration: data.times[data.times.length - 1],
+        })
+        setTrajectory(data)
+      } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === "AbortError") return
+        console.error("❌ Failed to load trajectory:", err)
+      }
+    }
+
     void load()
+    void loadTrajectory()
     return () => controller.abort()
   }, [])
 
@@ -261,7 +293,7 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
         gl={{ antialias: true, alpha: false }}
         style={{ background: "#030303" }}
       >
-        <Scene positions={positions} />
+        <Scene positions={positions} trajectory={trajectory} />
       </Canvas>
       <div
         className={cn(

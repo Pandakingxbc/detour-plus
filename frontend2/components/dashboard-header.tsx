@@ -15,8 +15,10 @@ function formatTimestamp(date: Date): string {
 
 export function DashboardHeader() {
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
+  const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
+    setMounted(true)
     const interval = window.setInterval(() => {
       setLastUpdated(new Date())
     }, 1000)
@@ -43,7 +45,9 @@ export function DashboardHeader() {
           </Badge>
           <p className="text-sm text-muted-foreground">
             Last updated:{" "}
-            <span className="font-mono text-foreground">{timestamp}</span>
+            <span className="font-mono text-foreground">
+              {mounted ? timestamp : "--:--:--"}
+            </span>
           </p>
         </div>
       </div>
