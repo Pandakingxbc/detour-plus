@@ -5,6 +5,8 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { OrbitControls, Stars } from "@react-three/drei"
 import * as THREE from "three"
 
+import { cn } from "@/lib/utils"
+
 const EARTH_RADIUS_M = 6_378_137
 const SCALE = 1 / EARTH_RADIUS_M
 
@@ -16,7 +18,8 @@ interface MockOrbit {
   radius: number
   inclination: number
   ascendingNode: number
-  phase: number
+  argumentOfPerigee: number
+  phaseAtEpoch: number
   speed: number
 }
 
@@ -128,10 +131,11 @@ function MockObjects({ count = 2400 }: { count?: number }) {
 
   const orbits = useMemo<MockOrbit[]>(() => {
     return Array.from({ length: count }, () => ({
-      radius: 1.05 + Math.random() * 0.28,
+      radius: 1.04 + Math.random() * 0.32,
       inclination: Math.random() * Math.PI,
       ascendingNode: Math.random() * Math.PI * 2,
-      phase: Math.random() * Math.PI * 2,
+      argumentOfPerigee: Math.random() * Math.PI * 2,
+      phaseAtEpoch: Math.random() * Math.PI * 2,
       speed: 0.04 + Math.random() * 0.2,
     }))
   }, [count])
@@ -142,12 +146,22 @@ function MockObjects({ count = 2400 }: { count?: number }) {
 
     const t = clock.elapsedTime
     orbits.forEach((orbit, index) => {
-      const theta = orbit.phase + t * orbit.speed
-      const x = orbit.radius * Math.cos(theta)
-      const y = orbit.radius * Math.sin(theta)
+      // Orbital-plane angle.
+      const u = orbit.phaseAtEpoch + orbit.argumentOfPerigee + t * orbit.speed
+      const xOrb = orbit.radius * Math.cos(u)
+      const yOrb = orbit.radius * Math.sin(u)
 
-      dummy.position.set(x, y, 0)
-      dummy.rotation.set(orbit.inclination, 0, orbit.ascendingNode)
+      // Rotate from orbital plane into ECI-like frame by inclination + RAAN.
+      const cosI = Math.cos(orbit.inclination)
+      const sinI = Math.sin(orbit.inclination)
+      const cosO = Math.cos(orbit.ascendingNode)
+      const sinO = Math.sin(orbit.ascendingNode)
+
+      const x = xOrb * cosO - yOrb * cosI * sinO
+      const y = xOrb * sinO + yOrb * cosI * cosO
+      const z = yOrb * sinI
+
+      dummy.position.set(x, y, z)
       dummy.scale.setScalar(0.0043)
       dummy.updateMatrix()
       mesh.setMatrixAt(index, dummy.matrix)
@@ -174,7 +188,7 @@ function Scene({ positions }: { positions: THREE.Vector3[] }) {
     <>
       <ambientLight intensity={0.35} />
       <directionalLight position={[5, 3, 5]} intensity={1.2} />
-      <Stars radius={100} depth={60} count={4200} factor={3} saturation={0} />
+      <Stars radius={100} depth={60} count={4200} factor={3.6} saturation={0} />
       <Earth />
       <Atmosphere />
       {positions.length > 0 ? <StaticObjects positions={positions} /> : <MockObjects />}
@@ -198,7 +212,11 @@ function toScaledVector(position: [number, number, number]): THREE.Vector3 | nul
   return new THREE.Vector3(x * SCALE, y * SCALE, z * SCALE)
 }
 
-export function GlobeView() {
+interface GlobeViewProps {
+  compacted?: boolean
+}
+
+export function GlobeView({ compacted = false }: GlobeViewProps) {
   const [positions, setPositions] = useState<THREE.Vector3[]>([])
   const [mode, setMode] = useState<"live" | "mock">("mock")
 
@@ -232,7 +250,12 @@ export function GlobeView() {
   }, [])
 
   return (
-    <div className="absolute inset-0">
+    <div
+      className={cn(
+        "absolute inset-0 origin-center transition-transform duration-500 ease-in-out",
+        compacted ? "-translate-y-10 scale-95" : "translate-y-0 scale-100"
+      )}
+    >
       <Canvas
         camera={{ fov: 45, near: 0.1, far: 1000, position: [0, 0, 4] }}
         gl={{ antialias: true, alpha: false }}
@@ -240,7 +263,12 @@ export function GlobeView() {
       >
         <Scene positions={positions} />
       </Canvas>
-      <div className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-black/55 px-2 py-1 text-xs text-gray-400">
+      <div
+        className={cn(
+          "pointer-events-none absolute left-3 rounded-md bg-black/55 px-2 py-1 text-xs text-gray-400 transition-[bottom] duration-500 ease-in-out",
+          compacted ? "bottom-64" : "bottom-3"
+        )}
+      >
         Orbit objects: {mode === "live" ? "Live backend feed" : "Mock mode fallback"}
       </div>
     </div>
