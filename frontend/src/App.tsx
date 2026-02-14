@@ -5,6 +5,8 @@ import EventDetail from './components/EventDetail'
 import ManeuverPanel from './components/ManeuverPanel'
 import { useStore } from './store/useStore'
 import { useApi } from './hooks/useApi'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
 
 export default function App() {
   const loading = useStore(s => s.loading)
@@ -23,27 +25,26 @@ export default function App() {
   }, [loadCatalogStatus, loadObjects])
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#0a0e1a]">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 bg-[#111827] border-b border-gray-700/50 shrink-0">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-bold text-white tracking-tight">
+    <div className="flex h-screen w-screen flex-col bg-background text-foreground">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-card/90 px-4 py-3 backdrop-blur-sm">
+        <div className="flex min-w-0 items-center gap-3">
+          <h1 className="text-lg font-bold tracking-tight text-primary">
             DETOUR
           </h1>
-          <span className="text-xs text-gray-400 hidden sm:inline">
+          <span className="hidden text-xs text-muted-foreground sm:inline">
             Space Debris Collision Avoidance Copilot
           </span>
         </div>
-        <div className="flex items-center gap-4 text-xs text-gray-400">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           {loading && (
-            <span className="flex items-center gap-1 text-blue-400">
-              <span className="inline-block w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
-              Processing...
-            </span>
+            <Badge variant="secondary" className="gap-1 text-primary">
+              <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
+              Processing
+            </Badge>
           )}
-          <span>
-            Objects: <span className="text-white font-mono">{objects.length || catalogStatus?.object_count || '---'}</span>
-          </span>
+          <Badge variant="outline" className="font-mono text-foreground">
+            Objects: {objects.length || catalogStatus?.object_count || '---'}
+          </Badge>
           {catalogStatus?.last_refresh && (
             <span className="hidden md:inline">
               Updated: {new Date(catalogStatus.last_refresh).toLocaleTimeString()}
@@ -52,24 +53,21 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main content */}
-      <div className="flex flex-1 min-h-0">
-        {/* Left panel: Conjunctions */}
-        <aside className="w-72 bg-[#111827] border-r border-gray-700/50 flex flex-col shrink-0 overflow-hidden">
+      <div className="grid min-h-0 flex-1 grid-rows-[18rem_1fr_24rem] lg:grid-cols-[20rem_1fr_23rem] lg:grid-rows-1">
+        <aside className="min-h-0 overflow-hidden border-b bg-card/40 lg:border-b-0 lg:border-r">
           <ConjunctionPanel />
         </aside>
 
-        {/* Center: Globe */}
-        <main className="flex-1 relative">
+        <main className="relative min-h-0">
           <Globe />
         </main>
 
-        {/* Right panel: Detail + Maneuvers */}
-        <aside className="w-80 bg-[#111827] border-l border-gray-700/50 flex flex-col shrink-0 overflow-hidden">
-          <div className="flex-1 overflow-y-auto border-b border-gray-700/50">
+        <aside className="flex min-h-0 flex-col overflow-hidden border-t bg-card/40 lg:border-l lg:border-t-0">
+          <div className="min-h-0 flex-1">
             <EventDetail />
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <Separator />
+          <div className="min-h-0 flex-1">
             <ManeuverPanel />
           </div>
         </aside>

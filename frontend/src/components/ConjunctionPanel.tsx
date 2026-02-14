@@ -1,18 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useStore } from '../store/useStore'
 import { useApi } from '../hooks/useApi'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { cn } from '@/lib/utils'
 
 function riskBadge(level: string) {
   const colors: Record<string, string> = {
-    critical: 'bg-red-500/20 text-red-400 border-red-500/30',
-    high: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-    medium: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-    low: 'bg-green-500/20 text-green-400 border-green-500/30',
+    critical: 'border-red-500/40 bg-red-500/20 text-red-300',
+    high: 'border-orange-500/40 bg-orange-500/20 text-orange-300',
+    medium: 'border-yellow-500/40 bg-yellow-500/20 text-yellow-300',
+    low: 'border-green-500/40 bg-green-500/20 text-green-300',
   }
   return (
-    <span className={`px-2 py-0.5 text-xs font-semibold rounded border ${colors[level] || colors.low}`}>
+    <Badge variant="outline" className={cn('font-semibold tracking-wide', colors[level] || colors.low)}>
       {level.toUpperCase()}
-    </span>
+    </Badge>
   )
 }
 
@@ -25,13 +31,14 @@ export default function ConjunctionPanel() {
   const conjunctions = useStore(s => s.conjunctions)
   const loading = useStore(s => s.loading)
   const primaryId = useStore(s => s.primaryId)
+  const selectedEvent = useStore(s => s.selectedEvent)
   const setPrimaryId = useStore(s => s.setPrimaryId)
   const setSelectedEvent = useStore(s => s.setSelectedEvent)
   const { screenConjunctions, loadTrajectory } = useApi()
   const [inputId, setInputId] = useState(String(primaryId))
 
   const handleScreen = () => {
-    const id = parseInt(inputId)
+    const id = parseInt(inputId, 10)
     if (!isNaN(id)) {
       setPrimaryId(id)
       screenConjunctions(id, 86400, 50, 200)
@@ -40,73 +47,70 @@ export default function ConjunctionPanel() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="p-3 border-b border-gray-700">
-        <h2 className="text-sm font-bold text-blue-400 uppercase tracking-wider mb-2">
-          Conjunction Screening
-        </h2>
-        <div className="flex gap-2">
-          <input
+    <div className="flex h-full flex-col gap-3 p-3">
+      <Card className="border-border/70 bg-card/70">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-primary">Conjunction Screening</CardTitle>
+          <CardDescription>Enter a NORAD ID to scan nearby conjunction events.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex gap-2">
+          <Input
             type="text"
             value={inputId}
             onChange={e => setInputId(e.target.value)}
             placeholder="NORAD ID"
-            className="flex-1 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-sm text-white focus:border-blue-500 focus:outline-none"
             onKeyDown={e => e.key === 'Enter' && handleScreen()}
           />
-          <button
-            onClick={handleScreen}
-            disabled={loading}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white text-sm px-3 py-1 rounded font-medium transition-colors"
-          >
+          <Button onClick={handleScreen} disabled={loading}>
             {loading ? 'Scanning...' : 'Screen'}
-          </button>
+          </Button>
+        </CardContent>
+      </Card>
+
+      <ScrollArea className="min-h-0 flex-1 rounded-xl border border-border/70 bg-card/50">
+        <div className="space-y-2 p-2">
+          {conjunctions.length === 0 && !loading && (
+            <div className="p-4 text-center text-sm text-muted-foreground">
+              Enter a NORAD ID and click Screen to find conjunctions.
+              <br />
+              <span className="mt-1 block text-xs">Try `25544` (ISS) or `48274` (Starlink)</span>
+            </div>
+          )}
+
+          {conjunctions.map((event) => (
+            <button
+              key={event.event_id}
+              onClick={() => setSelectedEvent(event)}
+              className={cn(
+                'w-full text-left rounded-lg border border-border/60 bg-background/70 p-3 transition-colors hover:bg-accent/40',
+                selectedEvent?.event_id === event.event_id && 'ring-1 ring-ring'
+              )}
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-medium text-foreground">#{event.secondary_id}</span>
+                {riskBadge(event.risk_level)}
+              </div>
+              <div className="grid grid-cols-2 gap-x-4 text-xs text-muted-foreground">
+                <div>
+                  Miss: <span className="text-foreground">{formatDistance(event.miss_distance_m)}</span>
+                </div>
+                <div>
+                  Prob: <span className="text-foreground">{event.probability.toExponential(2)}</span>
+                </div>
+                <div>
+                  TCA: <span className="text-foreground">{event.tca_offset_sec.toFixed(0)}s</span>
+                </div>
+                <div>
+                  Vel: <span className="text-foreground">{event.relative_velocity_mps.toFixed(0)} m/s</span>
+                </div>
+              </div>
+            </button>
+          ))}
         </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto">
-        {conjunctions.length === 0 && !loading && (
-          <div className="p-4 text-center text-gray-500 text-sm">
-            Enter a NORAD ID and click Screen to find conjunctions.
-            <br />
-            <span className="text-xs text-gray-600 mt-1 block">
-              Try 25544 (ISS) or 48274 (Starlink)
-            </span>
-          </div>
-        )}
-
-        {conjunctions.map((event) => (
-          <button
-            key={event.event_id}
-            onClick={() => setSelectedEvent(event)}
-            className="w-full text-left p-3 border-b border-gray-700/50 hover:bg-gray-800/50 transition-colors"
-          >
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-sm font-medium text-white">
-                #{event.secondary_id}
-              </span>
-              {riskBadge(event.risk_level)}
-            </div>
-            <div className="grid grid-cols-2 gap-x-4 text-xs text-gray-400">
-              <div>
-                Miss: <span className="text-white">{formatDistance(event.miss_distance_m)}</span>
-              </div>
-              <div>
-                Prob: <span className="text-white">{event.probability.toExponential(2)}</span>
-              </div>
-              <div>
-                TCA: <span className="text-white">{event.tca_offset_sec.toFixed(0)}s</span>
-              </div>
-              <div>
-                Vel: <span className="text-white">{event.relative_velocity_mps.toFixed(0)} m/s</span>
-              </div>
-            </div>
-          </button>
-        ))}
-      </div>
+      </ScrollArea>
 
       {conjunctions.length > 0 && (
-        <div className="p-2 border-t border-gray-700 text-xs text-gray-500 text-center">
+        <div className="text-center text-xs text-muted-foreground">
           {conjunctions.length} conjunction{conjunctions.length !== 1 ? 's' : ''} found
         </div>
       )}

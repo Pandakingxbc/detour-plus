@@ -1,31 +1,68 @@
 @import "tailwindcss";
 
 :root {
-  --bg-primary: #0a0e1a;
-  --bg-secondary: #111827;
-  --bg-panel: #1f2937;
-  --text-primary: #f9fafb;
-  --text-secondary: #9ca3af;
-  --accent-blue: #3b82f6;
-  --risk-low: #22c55e;
-  --risk-medium: #eab308;
-  --risk-high: #f97316;
-  --risk-critical: #ef4444;
+  --background: 225 50% 8%;
+  --foreground: 220 18% 92%;
+  --card: 222 42% 12%;
+  --card-foreground: 220 20% 92%;
+  --popover: 222 42% 12%;
+  --popover-foreground: 220 20% 92%;
+  --primary: 211 100% 56%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 217 28% 20%;
+  --secondary-foreground: 220 18% 92%;
+  --muted: 220 25% 16%;
+  --muted-foreground: 217 12% 66%;
+  --accent: 216 34% 22%;
+  --accent-foreground: 220 18% 92%;
+  --destructive: 0 78% 58%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 217 24% 25%;
+  --input: 217 24% 25%;
+  --ring: 211 100% 62%;
+  --warning: 37 94% 52%;
+  --warning-foreground: 222 47% 11%;
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
 }
 
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  border-color: hsl(var(--border));
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  overflow: hidden;
+  font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
   height: 100vh;
   width: 100vw;
+  overflow: hidden;
 }
 
 #root {
