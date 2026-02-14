@@ -37,7 +37,12 @@ export function useApi() {
 
   const loadCatalogStatus = useCallback(async () => {
     try {
-      const data = await fetchJson<{ object_count: number; last_refresh: string | null }>(
+      const data = await fetchJson<{
+        object_count: number
+        last_refresh: string | null
+        groups?: string[]
+        sources?: string[]
+      }>(
         `${API_BASE}/catalog/status`
       )
       setCatalogStatus(data)
@@ -99,6 +104,11 @@ export function useApi() {
     secondaryId: number,
     tcaOffsetSec: number,
     missDistanceM: number,
+    options?: {
+      massKg?: number
+      ispS?: number
+      targetMissKm?: number
+    },
   ) => {
     setLoading(true)
     try {
@@ -111,6 +121,9 @@ export function useApi() {
             secondary_id: secondaryId,
             tca_offset_sec: tcaOffsetSec,
             miss_distance_m: missDistanceM,
+            mass_kg: options?.massKg ?? 500,
+            isp_s: options?.ispS ?? 220,
+            target_miss_km: options?.targetMissKm ?? 5,
           }),
         }
       )

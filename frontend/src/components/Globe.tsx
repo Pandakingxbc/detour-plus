@@ -285,7 +285,7 @@ export default function Globe() {
       <Canvas
         camera={{ fov: 45, near: 0.1, far: 1000, position: [0, 0, 4] }}
         gl={{ antialias: true, alpha: false }}
-        style={{ background: '#0a0e1a' }}
+        style={{ background: '#050505' }}
       >
         <Scene />
       </Canvas>

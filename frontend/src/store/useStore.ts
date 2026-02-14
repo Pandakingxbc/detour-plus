@@ -61,8 +61,14 @@ interface AppState {
   selectedObject: OrbitalObject | null
   selectedEvent: ConjunctionEvent | null
   primaryId: number
+  planRiskLevel: string | null
   loading: boolean
-  catalogStatus: { object_count: number; last_refresh: string | null } | null
+  catalogStatus: {
+    object_count: number
+    last_refresh: string | null
+    groups?: string[]
+    sources?: string[]
+  } | null
 
   // Actions
   setObjects: (objects: OrbitalObject[]) => void
@@ -73,8 +79,14 @@ interface AppState {
   setSelectedTrajectory: (traj: Trajectory | null) => void
   setPostManeuverTrajectory: (traj: Trajectory | null) => void
   setPrimaryId: (id: number) => void
+  setPlanRiskLevel: (level: string | null) => void
   setLoading: (loading: boolean) => void
-  setCatalogStatus: (status: { object_count: number; last_refresh: string | null } | null) => void
+  setCatalogStatus: (status: {
+    object_count: number
+    last_refresh: string | null
+    groups?: string[]
+    sources?: string[]
+  } | null) => void
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -86,6 +98,7 @@ export const useStore = create<AppState>((set) => ({
   selectedObject: null,
   selectedEvent: null,
   primaryId: 25544, // ISS by default
+  planRiskLevel: null,
   loading: false,
   catalogStatus: null,
 
@@ -97,6 +110,7 @@ export const useStore = create<AppState>((set) => ({
   setSelectedTrajectory: (selectedTrajectory) => set({ selectedTrajectory }),
   setPostManeuverTrajectory: (postManeuverTrajectory) => set({ postManeuverTrajectory }),
   setPrimaryId: (primaryId) => set({ primaryId }),
+  setPlanRiskLevel: (planRiskLevel) => set({ planRiskLevel }),
   setLoading: (loading) => set({ loading }),
   setCatalogStatus: (catalogStatus) => set({ catalogStatus }),
 }))
