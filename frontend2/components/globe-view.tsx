@@ -198,7 +198,9 @@ function Scene({ positions, trajectory }: { positions: THREE.Vector3[], trajecto
       <Stars radius={100} depth={60} count={4200} factor={3.6} saturation={0} />
       <Earth />
       <Atmosphere />
-      {positions.length > 0 ? <StaticObjects positions={positions} /> : <MockObjects />}
+      {/* Show moving mock debris for visual effect */}
+      <MockObjects count={1200} />
+      {/* Show the special tracked satellite in red */}
       <MovingSatellite trajectory={trajectory} color="#ff3333" size={0.025} speed={15} />
       <OrbitControls
         enablePan
