@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 interface TerminalDrawerProps {
   isOpen: boolean
   onToggle: () => void
+  className?: string
 }
 
 const MOCK_LOGS = [
@@ -17,9 +18,9 @@ const MOCK_LOGS = [
   "[13:14:13] sim: post-maneuver miss distance +1.27 km",
 ]
 
-export function TerminalDrawer({ isOpen, onToggle }: TerminalDrawerProps) {
+export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerProps) {
   return (
-    <div className="pointer-events-auto mx-auto w-full max-w-[1600px]">
+    <div className={cn("pointer-events-auto w-full", className)}>
       <div
         className={cn(
           "overflow-hidden rounded-t-xl border border-border/80 bg-black/85 shadow-2xl transition-[max-height] duration-500 ease-in-out",

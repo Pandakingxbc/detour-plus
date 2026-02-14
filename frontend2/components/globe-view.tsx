@@ -253,7 +253,7 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
     <div
       className={cn(
         "absolute inset-0 origin-center transition-transform duration-500 ease-in-out",
-        compacted ? "-translate-y-10 scale-95" : "translate-y-0 scale-100"
+        compacted ? "-translate-y-16 scale-[0.7]" : "translate-y-0 scale-100"
       )}
     >
       <Canvas
