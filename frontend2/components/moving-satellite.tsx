@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useFrame } from "@react-three/fiber"
 import * as THREE from "three"
 
@@ -27,8 +27,9 @@ export function MovingSatellite({
   speed = 10, // 10x speed by default
 }: MovingSatelliteProps) {
   const meshRef = useRef<THREE.Mesh>(null)
-  const trailRef = useRef<THREE.Line>(null)
+  const trailRef = useRef<THREE.Mesh>(null)
   const startTimeRef = useRef<number>(0)
+  const [isHovered, setIsHovered] = useState(false)
 
   // Convert trajectory positions to Three.js vectors
   const scaledPositions = useMemo(() => {
@@ -42,19 +43,25 @@ export function MovingSatellite({
     return positions
   }, [trajectory])
 
-  // Create trail geometry
+  // Create trail geometry as a tube for thickness
   const trailGeometry = useMemo(() => {
-    if (scaledPositions.length === 0) return null
-    const geometry = new THREE.BufferGeometry()
-    const positions = new Float32Array(scaledPositions.length * 3)
-    scaledPositions.forEach((pos, i) => {
-      positions[i * 3] = pos.x
-      positions[i * 3 + 1] = pos.y
-      positions[i * 3 + 2] = pos.z
-    })
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3))
-    return geometry
-  }, [scaledPositions])
+    if (scaledPositions.length < 2) return null
+
+    // Use the positions as-is without forcing closure
+    // CatmullRomCurve3 with 'centripetal' for better orbital shapes
+    const curve = new THREE.CatmullRomCurve3(scaledPositions, false, 'centripetal')
+
+    // Create tube geometry along the curve with dynamic thickness
+    const tubeGeometry = new THREE.TubeGeometry(
+      curve,
+      scaledPositions.length * 2, // segments
+      isHovered ? 0.006 : 0.003, // radius (thicker when hovered)
+      8, // radial segments
+      false // not closed
+    )
+
+    return tubeGeometry
+  }, [scaledPositions, isHovered])
 
   useEffect(() => {
     startTimeRef.current = Date.now() / 1000
@@ -95,18 +102,25 @@ export function MovingSatellite({
   if (!trajectory || scaledPositions.length === 0) return null
 
   return (
-    <group>
+    <group
+      onPointerEnter={() => setIsHovered(true)}
+      onPointerLeave={() => setIsHovered(false)}
+    >
       {/* Moving satellite */}
       <mesh ref={meshRef}>
-        <sphereGeometry args={[size, 16, 16]} />
+        <sphereGeometry args={[isHovered ? size * 1.3 : size, 16, 16]} />
         <meshBasicMaterial color={color} />
       </mesh>
 
-      {/* Orbital trail */}
+      {/* Orbital trail as tube */}
       {trailGeometry && (
-        <line ref={trailRef} geometry={trailGeometry}>
-          <lineBasicMaterial color={color} opacity={0.3} transparent linewidth={1} />
-        </line>
+        <mesh ref={trailRef} geometry={trailGeometry}>
+          <meshBasicMaterial
+            color={color}
+            opacity={isHovered ? 0.7 : 0.4}
+            transparent
+          />
+        </mesh>
       )}
     </group>
   )

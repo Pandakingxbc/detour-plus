@@ -86,7 +86,7 @@ function Earth() {
   }, [])
 
   useFrame(() => {
-    if (meshRef.current) meshRef.current.rotation.y += 0.0002
+    if (meshRef.current) meshRef.current.rotation.y += 0.0002 // Much faster for testing (50x speed)
   })
 
   return (
@@ -201,7 +201,7 @@ function Scene({ positions, trajectory }: { positions: THREE.Vector3[], trajecto
       {/* Show moving mock debris for visual effect */}
       <MockObjects count={1200} />
       {/* Show the special tracked satellite in red */}
-      <MovingSatellite trajectory={trajectory} color="#ff3333" size={0.025} speed={15} />
+      <MovingSatellite trajectory={trajectory} color="#ff3333" size={0.025} speed={100} />
       <OrbitControls
         enablePan
         enableZoom
@@ -261,7 +261,8 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
     const loadTrajectory = async () => {
       try {
         console.log("🚀 Fetching satellite trajectory...")
-        const response = await fetch(`${apiBase}/api/satellite-demo/iss-trajectory?duration=5400&dt=30`, {
+        // Request 3 full orbits (~270 minutes) with 20 second intervals
+        const response = await fetch(`${apiBase}/api/satellite-demo/iss-trajectory?duration=16200&dt=20`, {
           signal: controller.signal,
         })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -269,6 +270,7 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
         console.log("✅ Trajectory loaded successfully:", {
           points: data.positions.length,
           duration: data.times[data.times.length - 1],
+          orbits: "~3 full orbits"
         })
         setTrajectory(data)
       } catch (err) {
