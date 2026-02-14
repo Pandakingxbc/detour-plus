@@ -218,7 +218,6 @@ interface GlobeViewProps {
 
 export function GlobeView({ compacted = false }: GlobeViewProps) {
   const [positions, setPositions] = useState<THREE.Vector3[]>([])
-  const [mode, setMode] = useState<"live" | "mock">("mock")
 
   useEffect(() => {
     const controller = new AbortController()
@@ -236,12 +235,10 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
 
         if (scaled.length > 0) {
           setPositions(scaled)
-          setMode("live")
           return
         }
-        setMode("mock")
       } catch {
-        setMode("mock")
+        // Keep rendering mock objects when backend data is unavailable.
       }
     }
 
@@ -252,25 +249,18 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
   return (
     <div
       className={cn(
-        "absolute inset-0 origin-center transition-transform duration-500 ease-in-out",
+        "absolute inset-0 h-full w-full origin-center overflow-hidden transition-transform duration-500 ease-in-out",
         compacted ? "-translate-y-16 scale-[0.7]" : "translate-y-0 scale-100"
       )}
     >
       <Canvas
+        className="h-full w-full"
         camera={{ fov: 45, near: 0.1, far: 1000, position: [0, 0, 4] }}
         gl={{ antialias: true, alpha: false }}
-        style={{ background: "#030303" }}
+        style={{ background: "#030303", width: "100%", height: "100%" }}
       >
         <Scene positions={positions} />
       </Canvas>
-      <div
-        className={cn(
-          "pointer-events-none absolute left-3 rounded-md bg-black/55 px-2 py-1 text-xs text-gray-400 transition-[bottom] duration-500 ease-in-out",
-          compacted ? "bottom-64" : "bottom-3"
-        )}
-      >
-        Orbit objects: {mode === "live" ? "Live backend feed" : "Mock mode fallback"}
-      </div>
     </div>
   )
 }

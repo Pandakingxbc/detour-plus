@@ -1,7 +1,7 @@
 "use client"
 
 import Image from "next/image"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 
@@ -14,17 +14,18 @@ function formatTimestamp(date: Date): string {
 }
 
 export function DashboardHeader() {
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
+  const [timestamp, setTimestamp] = useState("--:--:--")
 
   useEffect(() => {
+    const tick = () => setTimestamp(formatTimestamp(new Date()))
+    tick()
+
     const interval = window.setInterval(() => {
-      setLastUpdated(new Date())
+      tick()
     }, 1000)
 
     return () => window.clearInterval(interval)
   }, [])
-
-  const timestamp = useMemo(() => formatTimestamp(lastUpdated), [lastUpdated])
 
   return (
     <header className="w-full rounded-xl border border-border/80 bg-card/80 px-6 py-3 shadow-sm backdrop-blur-md">

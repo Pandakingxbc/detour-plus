@@ -29,12 +29,13 @@ export function DashboardShell() {
         </div>
       </div>
 
-      <div className="pointer-events-none absolute inset-0 z-10 p-6 pt-28 pb-[3.25rem]">
+      <div className="pointer-events-none absolute inset-0 z-10 p-6 pt-28 pb-6">
         <div
-          className="mx-auto grid h-full w-full max-w-[1600px] grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-in-out lg:[grid-template-columns:var(--panel-cols)]"
+          className="mx-auto grid h-full w-full max-w-[1600px] grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-in-out lg:[grid-template-columns:var(--panel-cols)] lg:grid-rows-[minmax(0,1fr)_auto]"
           style={{ "--panel-cols": panelColumns } as CSSProperties}
         >
           <SidePanel
+            className="lg:col-start-1 lg:row-span-2"
             side="left"
             collapsed={leftCollapsed}
             onToggle={() => setLeftCollapsed((value) => !value)}
@@ -47,9 +48,10 @@ export function DashboardShell() {
             </p>
           </SidePanel>
 
-          <div className="hidden lg:block" />
+          <div className="hidden lg:block lg:col-start-2 lg:row-start-1" />
 
           <SidePanel
+            className="lg:col-start-3 lg:row-span-2"
             side="right"
             collapsed={rightCollapsed}
             onToggle={() => setRightCollapsed((value) => !value)}
@@ -61,21 +63,12 @@ export function DashboardShell() {
               This panel is floating above the globe.
             </p>
           </SidePanel>
-        </div>
-      </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-6">
-        <div
-          className="mx-auto grid w-full max-w-[1600px] grid-cols-1 gap-4 transition-[grid-template-columns] duration-500 ease-in-out lg:[grid-template-columns:var(--panel-cols)]"
-          style={{ "--panel-cols": panelColumns } as CSSProperties}
-        >
-          <div className="hidden lg:block" />
           <TerminalDrawer
-            className="mx-auto w-full"
+            className="lg:col-start-2 lg:row-start-2"
             isOpen={terminalOpen}
             onToggle={() => setTerminalOpen((open) => !open)}
           />
-          <div className="hidden lg:block" />
         </div>
       </div>
     </main>
