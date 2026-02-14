@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Globe from './components/Globe'
 import ConjunctionPanel from './components/ConjunctionPanel'
 import ManeuverPanel from './components/ManeuverPanel'
+import detourLogo from './assets/de.png'
 import { useStore, type ConjunctionEvent } from './store/useStore'
 import { useApi } from './hooks/useApi'
 import { Badge } from '@/components/ui/badge'
@@ -85,29 +86,32 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-card/90 px-4 py-3 backdrop-blur-sm">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-bold tracking-tight text-primary">DETOUR</h1>
-          <Badge variant="outline" className={riskClass(topRisk)}>
-            RISK: {topRisk}
-          </Badge>
-        </div>
+      <div className="px-8 pt-2">
+        <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border bg-card/90 px-6 py-1.5 backdrop-blur-sm">
+          <div className="flex items-center gap-2">
+            <img
+              src={detourLogo}
+              alt="Detour logo"
+              className="h-10 w-auto shrink-0 object-contain"
+            />
+          </div>
 
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Badge variant="outline" className="font-mono text-foreground">
-            Active Threat: {activeThreatLabel}
-          </Badge>
-          <Badge variant="outline" className="font-mono">
-            Last update: {updatedLabel}
-          </Badge>
-          {loading && (
-            <Badge variant="secondary" className="gap-1 text-primary">
-              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
-              Processing
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Badge variant="outline" className={riskClass(topRisk)}>
+              RISK: {topRisk}
             </Badge>
-          )}
-        </div>
-      </header>
+            <Badge variant="outline" className="font-mono">
+              Last update: {updatedLabel}
+            </Badge>
+            {loading && (
+              <Badge variant="secondary" className="gap-1 text-primary">
+                <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-primary" />
+                Processing
+              </Badge>
+            )}
+          </div>
+        </header>
+      </div>
 
       <div className="grid min-h-0 flex-1 grid-rows-[23rem_1fr_36rem] lg:grid-cols-[23rem_1fr_28rem] lg:grid-rows-1">
         <aside className="min-h-0 overflow-y-auto border-b bg-card/40 lg:border-b-0 lg:border-r">
