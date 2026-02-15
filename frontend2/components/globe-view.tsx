@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
-import { OrbitControls, Stars } from "@react-three/drei"
+import { Line, OrbitControls, Stars } from "@react-three/drei"
 import * as THREE from "three"
 
 import { geodeticToUnitVector } from "@/lib/geo"
@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils"
 const EARTH_RADIUS_M = 6_378_137
 const SCALE = 1 / EARTH_RADIUS_M
 const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
+const DISPLAY_OBJECT_LIMIT = 1800
 
 interface ApiOrbitalObject {
   position?: [number, number, number]
@@ -94,6 +95,68 @@ function Earth() {
   )
 }
 
+function Graticule() {
+  const latLines = useMemo(() => {
+    const latitudes = [-60, -30, 0, 30, 60]
+    return latitudes.map((lat) => {
+      const points: [number, number, number][] = []
+      for (let lon = -180; lon <= 180; lon += 2) {
+        const p = geodeticToUnitVector(lat, lon, 0)
+        points.push([p.x * 1.002, p.y * 1.002, p.z * 1.002])
+      }
+      return points
+    })
+  }, [])
+
+  const lonLines = useMemo(() => {
+    const longitudes = [-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150]
+    return longitudes.map((lon) => {
+      const points: [number, number, number][] = []
+      for (let lat = -90; lat <= 90; lat += 2) {
+        const p = geodeticToUnitVector(lat, lon, 0)
+        points.push([p.x * 1.002, p.y * 1.002, p.z * 1.002])
+      }
+      return points
+    })
+  }, [])
+
+  return (
+    <group>
+      {latLines.map((points, index) => (
+        <Line key={`lat-${index}`} points={points} color="#ffffff" transparent opacity={0.28} lineWidth={0.6} />
+      ))}
+      {lonLines.map((points, index) => (
+        <Line key={`lon-${index}`} points={points} color="#ffffff" transparent opacity={0.25} lineWidth={0.6} />
+      ))}
+    </group>
+  )
+}
+
+function ReferenceMarkers() {
+  const markerCoords = useMemo(
+    () => [
+      { name: "Gulf of Guinea (0,0)", lat: 0, lon: 0 },
+      { name: "Greenwich", lat: 51.4779, lon: -0.0015 },
+      { name: "Tokyo", lat: 35.6764, lon: 139.65 },
+    ],
+    []
+  )
+
+  return (
+    <group>
+      {markerCoords.map((marker) => {
+        const p = geodeticToUnitVector(marker.lat, marker.lon, 0)
+        return (
+          <mesh key={marker.name} position={[p.x * 1.004, p.y * 1.004, p.z * 1.004]}>
+            <sphereGeometry args={[0.01, 10, 10]} />
+            <meshBasicMaterial color="#ffffff" transparent opacity={0.9} />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
 function Atmosphere() {
   return (
     <mesh>
@@ -103,7 +166,11 @@ function Atmosphere() {
   )
 }
 
-function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
+function StaticObjects({
+  positions,
+}: {
+  positions: THREE.Vector3[]
+}) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
 
@@ -113,7 +180,7 @@ function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
 
     positions.forEach((position, index) => {
       dummy.position.copy(position)
-      dummy.scale.setScalar(0.0045)
+      dummy.scale.setScalar(0.0063)
       dummy.updateMatrix()
       mesh.setMatrixAt(index, dummy.matrix)
     })
@@ -125,12 +192,16 @@ function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, positions.length]}>
       <sphereGeometry args={[1, 6, 6]} />
-      <meshBasicMaterial color="#87bfff" transparent opacity={0.86} />
+      <meshBasicMaterial color="#f59e0b" transparent opacity={0.9} />
     </instancedMesh>
   )
 }
 
-function MockObjects({ count = 2400 }: { count?: number }) {
+function MockObjects({
+  count = 1400,
+}: {
+  count?: number
+}) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
 
@@ -165,7 +236,7 @@ function MockObjects({ count = 2400 }: { count?: number }) {
       const z = yOrb * sinI
 
       dummy.position.set(x, y, z)
-      dummy.scale.setScalar(0.0043)
+      dummy.scale.setScalar(0.006)
       dummy.updateMatrix()
       mesh.setMatrixAt(index, dummy.matrix)
     })
@@ -175,12 +246,16 @@ function MockObjects({ count = 2400 }: { count?: number }) {
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, orbits.length]}>
       <sphereGeometry args={[1, 6, 6]} />
-      <meshBasicMaterial color="#87bfff" transparent opacity={0.85} />
+      <meshBasicMaterial color="#f59e0b" transparent opacity={0.9} />
     </instancedMesh>
   )
 }
 
-function Scene({ positions }: { positions: THREE.Vector3[] }) {
+function Scene({
+  positions,
+}: {
+  positions: THREE.Vector3[]
+}) {
   const { camera } = useThree()
 
   useEffect(() => {
@@ -189,8 +264,12 @@ function Scene({ positions }: { positions: THREE.Vector3[] }) {
 
   return (
     <>
-      <Stars radius={100} depth={60} count={4200} factor={3.6} saturation={0} />
+      <Stars radius={110} depth={70} count={2600} factor={13.8} saturation={0} fade speed={0.15} />
+      <Stars radius={112} depth={75} count={1400} factor={20.4} saturation={0} fade speed={0.18} />
+      <Stars radius={115} depth={80} count={650} factor={25.8} saturation={0} fade speed={0.12} />
       <Earth />
+      <Graticule />
+      <ReferenceMarkers />
       <Atmosphere />
       {positions.length > 0 ? <StaticObjects positions={positions} /> : <MockObjects />}
       <OrbitControls
@@ -250,13 +329,14 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
 
     const load = async () => {
       try {
-        const response = await fetch(`${apiBase}/objects?limit=3500`, { signal: controller.signal })
+        const response = await fetch(`${apiBase}/objects?limit=2600`, { signal: controller.signal })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const objects = (await response.json()) as ApiOrbitalObject[]
         const scaled = objects
           .map((entry) => toGeodeticVector(entry) ?? toScaledVector(entry.position))
           .filter((value): value is THREE.Vector3 => value !== null)
+          .slice(0, DISPLAY_OBJECT_LIMIT)
 
         if (scaled.length > 0) {
           setPositions(scaled)
