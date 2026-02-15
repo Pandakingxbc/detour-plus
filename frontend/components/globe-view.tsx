@@ -12,6 +12,8 @@ const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
 const DISPLAY_OBJECT_LIMIT = 2500
 const DEBRIS_REFRESH_MS = 1000
 const DEBRIS_ORBIT_CLASSES = "LEO"
+const ORBIT_REFRESH_MS = 30_000
+const TARGET_TICK_MS = 1000
 
 interface DebrisObject {
   noradId: number
@@ -37,6 +39,12 @@ interface OrbitResponse {
   timeStartUtc: string
   stepSec: number
   points: OrbitPoint[]
+}
+
+interface OrbitTrackState {
+  points: THREE.Vector3[]
+  timeStartMs: number
+  stepSec: number
 }
 
 function toVectorFromGeodetic(lat: number, lon: number, altKm: number): THREE.Vector3 | null {
@@ -209,14 +217,20 @@ function TargetMarker({ point }: { point: THREE.Vector3 | null }) {
   )
 }
 
-function Scene({ debrisPositions, orbitPoints }: { debrisPositions: THREE.Vector3[]; orbitPoints: THREE.Vector3[] }) {
+function Scene({
+  debrisPositions,
+  orbitPoints,
+  currentTargetPoint,
+}: {
+  debrisPositions: THREE.Vector3[]
+  orbitPoints: THREE.Vector3[]
+  currentTargetPoint: THREE.Vector3 | null
+}) {
   const { camera } = useThree()
 
   useEffect(() => {
     camera.position.set(0, 0, 4)
   }, [camera])
-
-  const currentTargetPoint = orbitPoints[0] ?? null
 
   return (
     <>
@@ -241,7 +255,20 @@ interface GlobeViewProps {
 
 export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
   const [debrisPositions, setDebrisPositions] = useState<THREE.Vector3[]>([])
-  const [orbitPoints, setOrbitPoints] = useState<THREE.Vector3[]>([])
+  const [orbitTrack, setOrbitTrack] = useState<OrbitTrackState>({
+    points: [],
+    timeStartMs: Date.now(),
+    stepSec: 60,
+  })
+  const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now())
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setCurrentTimeMs(Date.now())
+    }, TARGET_TICK_MS)
+
+    return () => window.clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -288,13 +315,22 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
 
   useEffect(() => {
     if (!noradId) {
-      setOrbitPoints([])
+      setOrbitTrack({
+        points: [],
+        timeStartMs: Date.now(),
+        stepSec: 60,
+      })
       return
     }
 
     const controller = new AbortController()
+    let cancelled = false
+    let inFlight = false
 
     const loadOrbit = async () => {
+      if (cancelled || inFlight) return
+      inFlight = true
+
       try {
         const response = await fetch(`/api/orbit?norad=${noradId}&minutes=180&stepSec=60`, {
           signal: controller.signal,
@@ -306,18 +342,51 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
           .map((point) => toVectorFromGeodetic(point.lat, point.lon, point.altKm))
           .filter((value): value is THREE.Vector3 => value !== null)
 
-        setOrbitPoints(points)
+        const parsedStartMs = Date.parse(payload.timeStartUtc)
+        const startMs = Number.isFinite(parsedStartMs) ? parsedStartMs : Date.now()
+
+        if (!cancelled) {
+          setOrbitTrack({
+            points,
+            timeStartMs: startMs,
+            stepSec: Math.max(10, Math.round(payload.stepSec || 60)),
+          })
+        }
       } catch {
-        setOrbitPoints([])
+        if (!cancelled) {
+          setOrbitTrack((previous) => ({ ...previous, points: [] }))
+        }
+      } finally {
+        inFlight = false
       }
     }
 
     void loadOrbit()
+    const interval = window.setInterval(() => {
+      void loadOrbit()
+    }, ORBIT_REFRESH_MS)
 
     return () => {
+      cancelled = true
       controller.abort()
+      window.clearInterval(interval)
     }
   }, [noradId])
+
+  const currentTargetPoint = useMemo(() => {
+    if (orbitTrack.points.length === 0) return null
+
+    const stepMs = orbitTrack.stepSec * 1000
+    if (!Number.isFinite(stepMs) || stepMs <= 0) return orbitTrack.points[0]
+
+    const elapsedMs = Math.max(0, currentTimeMs - orbitTrack.timeStartMs)
+    const index = Math.min(
+      orbitTrack.points.length - 1,
+      Math.floor(elapsedMs / stepMs)
+    )
+
+    return orbitTrack.points[index] ?? orbitTrack.points[0]
+  }, [currentTimeMs, orbitTrack])
 
   return (
     <div
@@ -332,7 +401,11 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
         gl={{ antialias: true, alpha: false }}
         style={{ background: "#030303", width: "100%", height: "100%" }}
       >
-        <Scene debrisPositions={debrisPositions} orbitPoints={orbitPoints} />
+        <Scene
+          debrisPositions={debrisPositions}
+          orbitPoints={orbitTrack.points}
+          currentTargetPoint={currentTargetPoint}
+        />
       </Canvas>
     </div>
   )
