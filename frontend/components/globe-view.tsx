@@ -9,7 +9,7 @@ import { geodeticToUnitVector } from "@/lib/geo"
 import { cn } from "@/lib/utils"
 
 const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
-const DISPLAY_OBJECT_LIMIT = 900
+const DISPLAY_OBJECT_LIMIT = 2500
 const DEBRIS_REFRESH_MS = 1000
 const DEBRIS_ORBIT_CLASSES = "LEO"
 
