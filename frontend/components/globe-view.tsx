@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { Line, OrbitControls, Stars } from "@react-three/drei"
 import * as THREE from "three"
@@ -10,9 +10,15 @@ import { cn } from "@/lib/utils"
 import { SimulationOverlayV2 } from "@/components/simulation-overlay-v2"
 import type { SimEngine } from "@/lib/sim-engine"
 
+declare global {
+  interface Window {
+    __DETOUR_SPEED__?: number
+  }
+}
+
 const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
 const DISPLAY_OBJECT_LIMIT = 2500
-const DEBRIS_REFRESH_MS = 1000
+const DEBRIS_REFRESH_MS = 15_000
 const DEBRIS_ORBIT_CLASSES = "LEO"
 const ORBIT_REFRESH_MS = 30_000
 const TARGET_TICK_MS = 1000
@@ -272,48 +278,68 @@ function StaticObjects({
   )
 }
 
-function OrbitTrack({ points, isManual }: { points: THREE.Vector3[]; isManual?: boolean }) {
+function OrbitTrack({ points, isManual, maneuvering }: { points: THREE.Vector3[]; isManual?: boolean; maneuvering?: boolean }) {
   if (points.length < 2) return null
 
   const linePoints = points.map((point) => [point.x, point.y, point.z] as [number, number, number])
-  const color = isManual ? "#10b981" : "#7dd3fc"
+  const color = maneuvering ? "#ef4444" : isManual ? "#10b981" : "#7dd3fc"
+  const lineWidth = maneuvering ? 2.2 : 1.4
 
-  return <Line points={linePoints} color={color} transparent opacity={0.95} lineWidth={1.4} />
+  return <Line points={linePoints} color={color} transparent opacity={0.95} lineWidth={lineWidth} />
 }
 
-function TargetMarker({ orbitTrack, isManual }: { orbitTrack: OrbitTrackState; isManual?: boolean }) {
+const MARKER_DAMPING = 0.08
+
+function TargetMarker({ orbitTrack, isManual, maneuvering }: { orbitTrack: OrbitTrackState; isManual?: boolean; maneuvering?: boolean }) {
   const meshRef = useRef<THREE.Mesh>(null)
+  const targetPos = useRef(new THREE.Vector3())
+  const initialized = useRef(false)
 
   useFrame(() => {
     if (!meshRef.current || orbitTrack.points.length < 2) return
 
     const stepMs = orbitTrack.stepSec * 1000
     if (!Number.isFinite(stepMs) || stepMs <= 0) {
-      meshRef.current.position.copy(orbitTrack.points[0])
+      targetPos.current.copy(orbitTrack.points[0])
+      if (!initialized.current) {
+        meshRef.current.position.copy(targetPos.current)
+        initialized.current = true
+      } else {
+        meshRef.current.position.lerp(targetPos.current, MARKER_DAMPING)
+      }
       return
     }
 
-    const elapsedMs = Math.max(0, Date.now() - orbitTrack.timeStartMs)
+    const speed = window.__DETOUR_SPEED__ || 1
+    const elapsedMs = Math.max(0, Date.now() - orbitTrack.timeStartMs) * speed
     const totalDurationMs = (orbitTrack.points.length - 1) * stepMs
     const loopedMs = totalDurationMs > 0 ? elapsedMs % totalDurationMs : 0
     const rawIndex = loopedMs / stepMs
     const index = Math.min(Math.floor(rawIndex), orbitTrack.points.length - 2)
     const alpha = rawIndex - index
 
-    meshRef.current.position.lerpVectors(
+    targetPos.current.lerpVectors(
       orbitTrack.points[index],
       orbitTrack.points[index + 1],
       alpha
     )
+
+    if (!initialized.current) {
+      meshRef.current.position.copy(targetPos.current)
+      initialized.current = true
+    } else {
+      meshRef.current.position.lerp(targetPos.current, MARKER_DAMPING)
+    }
   })
 
   if (orbitTrack.points.length === 0) return null
 
-  const color = isManual ? "#10b981" : "#22d3ee"
+  const color = maneuvering ? "#ef4444" : isManual ? "#10b981" : "#22d3ee"
+  const radius = maneuvering ? 0.018 : 0.012
 
   return (
     <mesh ref={meshRef}>
-      <sphereGeometry args={[0.012, 14, 14]} />
+      <sphereGeometry args={[radius, 14, 14]} />
       <meshBasicMaterial color={color} />
     </mesh>
   )
@@ -325,12 +351,14 @@ function Scene({
   orbitTrack,
   isManualSatellite,
   simEngine,
+  maneuvering,
 }: {
   debrisPositions: THREE.Vector3[]
   trailPoints: THREE.Vector3[]
   orbitTrack: OrbitTrackState
   isManualSatellite: boolean
   simEngine?: SimEngine | null
+  maneuvering?: boolean
 }) {
   const { camera } = useThree()
 
@@ -348,8 +376,8 @@ function Scene({
       <Earth />
       <Graticule />
       <Atmosphere />
-      {!isRealtimeSim && <OrbitTrack points={trailPoints} isManual={isManualSatellite} />}
-      {!isRealtimeSim && <TargetMarker orbitTrack={orbitTrack} isManual={isManualSatellite} />}
+      {!isRealtimeSim && <OrbitTrack points={trailPoints} isManual={isManualSatellite} maneuvering={maneuvering} />}
+      {!isRealtimeSim && <TargetMarker orbitTrack={orbitTrack} isManual={isManualSatellite} maneuvering={maneuvering} />}
       {debrisPositions.length > 0 && !isRealtimeSim ? <StaticObjects positions={debrisPositions} /> : null}
       {simEngine && <SimulationOverlayV2 engine={simEngine} />}
       <OrbitControls enablePan enableZoom minDistance={1.5} maxDistance={20} enableDamping dampingFactor={0.05} />
@@ -368,9 +396,19 @@ interface GlobeViewProps {
   noradId?: number | null
   manualSatelliteData?: ManualSatelliteData | null
   simEngine?: SimEngine | null
+  maneuvering?: boolean
 }
 
-export function GlobeView({ compacted = false, noradId, manualSatelliteData, simEngine }: GlobeViewProps) {
+const SPEED_STEPS = [1, 2, 5, 10, 25, 50, 100]
+
+export function GlobeView({ compacted = false, noradId, manualSatelliteData, simEngine, maneuvering = false }: GlobeViewProps) {
+  const [speed, setSpeed] = useState(1)
+
+  const handleSpeedChange = useCallback((value: number) => {
+    setSpeed(value)
+    window.__DETOUR_SPEED__ = value
+  }, [])
+
   const [debrisPositions, setDebrisPositions] = useState<THREE.Vector3[]>([])
   const [orbitTrack, setOrbitTrack] = useState<OrbitTrackState>({
     points: [],
@@ -502,10 +540,38 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
         const startMs = Number.isFinite(parsedStartMs) ? parsedStartMs : Date.now()
 
         if (!cancelled) {
-          setOrbitTrack({
-            points,
-            timeStartMs: startMs,
-            stepSec: Math.max(10, Math.round(payload.stepSec || 60)),
+          const newStepSec = Math.max(10, Math.round(payload.stepSec || 60))
+
+          setOrbitTrack((prev) => {
+            // If we have a previous track, compute where the marker currently
+            // is (as a fraction of the loop) and offset the new timeStartMs so
+            // the marker continues from roughly the same fractional position.
+            if (prev.points.length >= 2 && points.length >= 2) {
+              const prevStepMs = prev.stepSec * 1000
+              const prevTotal = (prev.points.length - 1) * prevStepMs
+              if (prevTotal > 0) {
+                const speedMul = window.__DETOUR_SPEED__ || 1
+                const elapsed = Math.max(0, Date.now() - prev.timeStartMs) * speedMul
+                const fraction = (elapsed % prevTotal) / prevTotal
+
+                const newStepMs = newStepSec * 1000
+                const newTotal = (points.length - 1) * newStepMs
+                // Shift timeStartMs back so the same fraction is current
+                const adjustedStart = Date.now() - fraction * newTotal
+
+                return {
+                  points,
+                  timeStartMs: adjustedStart,
+                  stepSec: newStepSec,
+                }
+              }
+            }
+
+            return {
+              points,
+              timeStartMs: startMs,
+              stepSec: newStepSec,
+            }
           })
         }
       } catch {
@@ -535,7 +601,8 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
     const stepMs = orbitTrack.stepSec * 1000
     if (!Number.isFinite(stepMs) || stepMs <= 0) return 0
 
-    const elapsedMs = Math.max(0, currentTimeMs - orbitTrack.timeStartMs)
+    const speed = window.__DETOUR_SPEED__ || 1
+    const elapsedMs = Math.max(0, currentTimeMs - orbitTrack.timeStartMs) * speed
     const totalDurationMs = (orbitTrack.points.length - 1) * stepMs
     if (totalDurationMs <= 0) return 0
 
@@ -565,10 +632,10 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
       )}
     >
       <Canvas
-        className="h-full w-full"
         camera={{ fov: 45, near: 0.1, far: 1000, position: [0, 0, 4] }}
         gl={{ antialias: true, alpha: false }}
-        style={{ background: "#030303", width: "100%", height: "100%" }}
+        resize={{ debounce: 0 }}
+        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", background: "#030303" }}
       >
         <Scene
           debrisPositions={debrisPositions}
@@ -576,8 +643,26 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
           orbitTrack={orbitTrack}
           isManualSatellite={noradId === -1}
           simEngine={simEngine}
+          maneuvering={maneuvering}
         />
       </Canvas>
+
+      {/* Speed control overlay */}
+      <div className="pointer-events-auto absolute bottom-4 left-4 flex items-center gap-2 rounded-full border border-white/10 bg-black/70 px-3 py-1.5 text-[10px] font-mono text-gray-300 backdrop-blur-sm">
+        <span className="select-none text-gray-500">SPD</span>
+        <input
+          type="range"
+          min={0}
+          max={SPEED_STEPS.length - 1}
+          step={1}
+          value={SPEED_STEPS.indexOf(speed)}
+          onChange={(e) => handleSpeedChange(SPEED_STEPS[Number(e.target.value)])}
+          className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-white/20 accent-cyan-400 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyan-400"
+        />
+        <span className={cn("min-w-[3ch] text-right tabular-nums", speed > 1 ? "text-cyan-400" : "text-gray-500")}>
+          {speed}x
+        </span>
+      </div>
     </div>
   )
 }

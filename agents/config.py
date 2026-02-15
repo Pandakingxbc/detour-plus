@@ -42,7 +42,7 @@ class LLMConfig:
 
     # Generation parameters
     temperature: float = 0.3          # low for deterministic tool-calling
-    max_tokens: int = 4096
+    max_tokens: int = 2048
     top_p: float = 0.95
 
     # Agent parameters
@@ -57,17 +57,24 @@ class LLMConfig:
             api_key=os.getenv("NEMOTRON_API_KEY", "not-needed"),
             model=os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"),
             temperature=float(os.getenv("NEMOTRON_TEMPERATURE", "0.3")),
-            max_tokens=int(os.getenv("NEMOTRON_MAX_TOKENS", "4096")),
+            max_tokens=int(os.getenv("NEMOTRON_MAX_TOKENS", "2048")),
         )
 
     def to_llm_kwargs(self) -> dict:
-        """Return kwargs for ChatOpenAI constructor."""
+        """Return kwargs for ChatOpenAI constructor.
+
+        max_tokens is omitted so vLLM automatically uses whatever
+        context-window space remains after the input tokens.  This
+        avoids 400 errors when accumulated agent context is large.
+        """
         return {
             "base_url": self.base_url,
             "api_key": self.api_key,
             "model": self.model,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
+            "extra_body": {
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
         }
 
 

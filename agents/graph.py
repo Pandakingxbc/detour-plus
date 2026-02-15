@@ -8,9 +8,11 @@ Uses Nemotron via vLLM's OpenAI-compatible API + LangChain + LangGraph.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import operator
+import queue as queue_module
 import time
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, TypedDict
@@ -40,9 +42,53 @@ from agents.tools import (
     PLANNER_TOOLS,
     SAFETY_TOOLS,
     SCOUT_TOOLS,
+    assess_risk,
+    execute_maneuver_on_satellite,
+    get_satellite_status,
+    propagate_satellite_orbit,
 )
 
 logger = logging.getLogger("detour.agents.graph")
+
+# Synthetic reasoning strings displayed in the terminal while the LLM processes.
+# Cycles per-agent so each shows domain-appropriate "thinking" lines.
+SYNTHETIC_THOUGHTS: Dict[str, List[str]] = {
+    "scout": [
+        "Scanning TLE catalog for close-approach objects...",
+        "Cross-referencing conjunction database with active satellites...",
+        "Filtering debris objects by orbital regime...",
+        "Checking Space-Track CDM alerts...",
+    ],
+    "analyst": [
+        "Computing miss-distance probability density...",
+        "Propagating covariance matrices through encounter window...",
+        "Evaluating Pc via Monte-Carlo sampling...",
+        "Assessing relative velocity and geometry at TCA...",
+    ],
+    "planner": [
+        "Generating candidate delta-V maneuver profiles...",
+        "Evaluating fuel-optimal avoidance trajectories...",
+        "Checking station-keeping budget constraints...",
+        "Ranking maneuver options by risk reduction...",
+    ],
+    "safety": [
+        "Verifying maneuver does not create secondary conjunctions...",
+        "Checking debris-generation risk of proposed trajectory...",
+        "Validating compliance with space-safety guidelines...",
+        "Assessing re-entry corridor clearance...",
+    ],
+    "ops_brief": [
+        "Compiling operator decision summary...",
+        "Formatting timeline and action items...",
+        "Synthesizing risk assessment into brief...",
+    ],
+    "detour": [
+        "Analyzing orbital conjunction geometry...",
+        "Running physics propagation for threat assessment...",
+        "Evaluating avoidance maneuver candidates...",
+        "Compiling operator-ready brief...",
+    ],
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -74,30 +120,40 @@ def _create_agent_node(
     agent_name: str,
     output_key: str,
     next_agent: Optional[str] = None,
+    event_queue: Optional[queue_module.Queue] = None,
 ):
     """
     Create a LangGraph node that:
     1. Calls the LLM with tool-calling enabled
     2. Loops on tool calls until the LLM is done
     3. Stores its final response in state[output_key]
-    4. Emits events for real-time streaming
+    4. Emits events for real-time streaming via event_queue
     """
     llm_with_tools = llm.bind_tools(tools) if tools else llm
     tool_node = ToolNode(tools) if tools else None
 
+    def _emit(event: dict, events: list):
+        """Push event to both the local list and the real-time queue."""
+        events.append(event)
+        if event_queue:
+            event_queue.put(event)
+
     def agent_node(state: AgentState) -> dict:
         """Run one agent to completion (with tool-calling loop)."""
         t0 = time.time()
-        events = [{
+        events: List[Dict[str, Any]] = []
+
+        _emit({
             "type": "agent_start",
             "agent": agent_name,
             "timestamp": time.time(),
-        }]
+        }, events)
 
         # Build messages: system prompt + all prior messages + handoff context
         msgs: List[BaseMessage] = [SystemMessage(content=system_prompt)]
 
-        # Add context from previous agents
+        # Add context from previous agents (truncated to stay within token budget)
+        _CTX_CAP = 500
         for key, label in [
             ("scout_output", "Scout findings"),
             ("analyst_output", "Analyst assessment"),
@@ -106,7 +162,8 @@ def _create_agent_node(
         ]:
             val = state.get(key)
             if val and key != output_key:
-                msgs.append(HumanMessage(content=f"[{label}]\n{val}"))
+                truncated = val[:_CTX_CAP] + "..." if len(val) > _CTX_CAP else val
+                msgs.append(HumanMessage(content=f"[{label}]\n{truncated}"))
 
         # Add the original user request (first human message)
         for m in state["messages"]:
@@ -117,6 +174,22 @@ def _create_agent_node(
         # Tool-calling loop
         max_iterations = 10
         for iteration in range(max_iterations):
+            _emit({
+                "type": "llm_call",
+                "agent": agent_name,
+                "iteration": iteration + 1,
+                "timestamp": time.time(),
+            }, events)
+
+            # Synthetic reasoning — gives the operator something to read while the LLM works
+            thoughts = SYNTHETIC_THOUGHTS.get(agent_name, ["Processing..."])
+            _emit({
+                "type": "thinking",
+                "agent": agent_name,
+                "text": thoughts[iteration % len(thoughts)],
+                "timestamp": time.time(),
+            }, events)
+
             response = llm_with_tools.invoke(msgs)
             msgs.append(response)
 
@@ -125,40 +198,79 @@ def _create_agent_node(
                 break
 
             # Execute tool calls
-            events.append({
+            _emit({
                 "type": "tool_calls",
                 "agent": agent_name,
                 "tools": [tc["name"] for tc in response.tool_calls],
                 "timestamp": time.time(),
-            })
+            }, events)
 
             if tool_node:
                 # Create a mini-state for the tool node
+                _TOOL_CAP = 800
                 tool_results = tool_node.invoke({"messages": msgs})
                 tool_msgs = tool_results.get("messages", [])
+                # Truncate tool outputs to stay within token budget
+                for tm in tool_msgs:
+                    if isinstance(tm, ToolMessage) and isinstance(tm.content, str) and len(tm.content) > _TOOL_CAP:
+                        tm.content = tm.content[:_TOOL_CAP] + "...[truncated]"
                 msgs.extend(tool_msgs)
 
                 for tm in tool_msgs:
                     if isinstance(tm, ToolMessage):
-                        events.append({
+                        _emit({
                             "type": "tool_result",
                             "agent": agent_name,
                             "tool": tm.name,
                             "timestamp": time.time(),
                             # Truncate large outputs for event stream
                             "summary": tm.content[:200] if isinstance(tm.content, str) else str(tm.content)[:200],
-                        })
+                        }, events)
+
+                        # When a maneuver is executed, emit post-maneuver state
+                        # so the frontend can update the globe visualization.
+                        if tm.name == "execute_maneuver_on_satellite":
+                            try:
+                                from api.state import get_satellite as _get_sat
+                                _sat = _get_sat()
+                                # Parse delta_v from the tool result
+                                _dv = [0.0, 0.0, 0.0]
+                                try:
+                                    _res = json.loads(tm.content) if isinstance(tm.content, str) else {}
+                                    if "delta_v" in _res:
+                                        _dv = _res["delta_v"]
+                                except Exception:
+                                    pass
+                                _emit({
+                                    "type": "maneuver_executed",
+                                    "agent": agent_name,
+                                    "timestamp": time.time(),
+                                    "position": _sat.position.tolist(),
+                                    "velocity": _sat.velocity.tolist(),
+                                    "delta_v": _dv,
+                                }, events)
+                            except Exception:
+                                pass
 
         # Extract final response
         final_content = msgs[-1].content if msgs else ""
 
         elapsed = time.time() - t0
-        events.append({
+        _emit({
             "type": "agent_complete",
             "agent": agent_name,
             "elapsed_sec": round(elapsed, 2),
             "timestamp": time.time(),
-        })
+        }, events)
+
+        # Emit agent output for real-time display
+        if final_content:
+            _emit({
+                "type": "agent_output",
+                "agent": agent_name,
+                "content": final_content,
+                "timestamp": time.time(),
+            }, events)
 
         logger.info(f"[{agent_name}] completed in {elapsed:.1f}s")
 
@@ -175,7 +287,10 @@ def _create_agent_node(
 # ─────────────────────────────────────────────────────────────────────────
 # Graph construction
 # ─────────────────────────────────────────────────────────────────────────
-def build_avoidance_graph(config: Optional[LLMConfig] = None) -> StateGraph:
+def build_avoidance_graph(
+    config: Optional[LLMConfig] = None,
+    event_queue: Optional[queue_module.Queue] = None,
+) -> StateGraph:
     """
     Build the multi-agent LangGraph for collision avoidance.
 
@@ -189,19 +304,25 @@ def build_avoidance_graph(config: Optional[LLMConfig] = None) -> StateGraph:
 
     # Create agent nodes
     scout_node = _create_agent_node(
-        llm, SCOUT_PROMPT, SCOUT_TOOLS, "scout", "scout_output", "analyst"
+        llm, SCOUT_PROMPT, SCOUT_TOOLS, "scout", "scout_output", "analyst",
+        event_queue=event_queue,
     )
     analyst_node = _create_agent_node(
-        llm, ANALYST_PROMPT, ANALYST_TOOLS, "analyst", "analyst_output", "planner"
+        llm, ANALYST_PROMPT, ANALYST_TOOLS, "analyst", "analyst_output", "planner",
+        event_queue=event_queue,
     )
     planner_node = _create_agent_node(
-        llm, PLANNER_PROMPT, PLANNER_TOOLS, "planner", "planner_output", "safety"
+        llm, PLANNER_PROMPT, PLANNER_TOOLS, "planner", "planner_output", "safety",
+        event_queue=event_queue,
     )
     safety_node = _create_agent_node(
-        llm, SAFETY_PROMPT, SAFETY_TOOLS, "safety", "safety_output", "ops_brief"
+        llm, SAFETY_PROMPT, SAFETY_TOOLS, "safety", "safety_output", "ops_brief",
+        event_queue=event_queue,
     )
+    OPS_BRIEF_TOOLS = [assess_risk, execute_maneuver_on_satellite, get_satellite_status, propagate_satellite_orbit]
     ops_brief_node = _create_agent_node(
-        llm, OPS_BRIEF_PROMPT, [], "ops_brief", "ops_brief", None
+        llm, OPS_BRIEF_PROMPT, OPS_BRIEF_TOOLS, "ops_brief", "ops_brief", None,
+        event_queue=event_queue,
     )
 
     # Build graph
@@ -227,7 +348,10 @@ def build_avoidance_graph(config: Optional[LLMConfig] = None) -> StateGraph:
 # ─────────────────────────────────────────────────────────────────────────
 # Single-agent mode (simpler, for quick testing)
 # ─────────────────────────────────────────────────────────────────────────
-def build_single_agent_graph(config: Optional[LLMConfig] = None) -> StateGraph:
+def build_single_agent_graph(
+    config: Optional[LLMConfig] = None,
+    event_queue: Optional[queue_module.Queue] = None,
+) -> StateGraph:
     """
     Build a single-agent graph with all tools available.
     Simpler than the multi-agent pipeline, good for testing.
@@ -253,7 +377,8 @@ When asked to analyze threats or plan avoidance:
 Be concise and actionable. Satellite operators need clear decisions, not essays."""
 
     agent_node = _create_agent_node(
-        llm, SINGLE_AGENT_PROMPT, ALL_TOOLS, "detour", "ops_brief", None
+        llm, SINGLE_AGENT_PROMPT, ALL_TOOLS, "detour", "ops_brief", None,
+        event_queue=event_queue,
     )
 
     graph = StateGraph(AgentState)
@@ -318,12 +443,17 @@ async def stream_avoidance_pipeline(
 ):
     """
     Async generator that streams agent events as they happen.
-    Use with SSE endpoint for real-time frontend updates.
+
+    Uses a thread-safe queue so events from synchronous agent nodes
+    (which LangGraph runs in a thread pool) are delivered to the
+    async SSE generator in real time, instead of batching per-node.
     """
+    eq: queue_module.Queue = queue_module.Queue()
+
     if mode == "multi":
-        graph = build_avoidance_graph(config)
+        graph = build_avoidance_graph(config, event_queue=eq)
     else:
-        graph = build_single_agent_graph(config)
+        graph = build_single_agent_graph(config, event_queue=eq)
 
     initial_state: AgentState = {
         "messages": [HumanMessage(content=request)],
@@ -336,27 +466,29 @@ async def stream_avoidance_pipeline(
         "events": [],
     }
 
-    # Stream updates as the graph executes
-    seen_events = 0
-    async for chunk in graph.astream(initial_state, {"recursion_limit": 50}):
-        # Each chunk is a dict with the node name as key
-        for node_name, node_output in chunk.items():
-            if node_name == "__end__":
-                yield {"type": "pipeline_complete", "timestamp": time.time()}
-                return
+    done = asyncio.Event()
 
-            events = node_output.get("events", [])
-            for event in events[seen_events:]:
-                yield event
-            seen_events = 0  # reset for next node
+    async def _run_graph():
+        try:
+            async for _chunk in graph.astream(initial_state, {"recursion_limit": 50}):
+                pass  # events are pushed to the queue from inside nodes
+        except Exception as e:
+            eq.put({"type": "error", "message": str(e), "timestamp": time.time()})
+        finally:
+            done.set()
 
-            # Yield intermediate outputs
-            for key in ["scout_output", "analyst_output", "planner_output", "safety_output", "ops_brief"]:
-                val = node_output.get(key)
-                if val:
-                    yield {
-                        "type": "agent_output",
-                        "agent": key.replace("_output", ""),
-                        "content": val,
-                        "timestamp": time.time(),
-                    }
+    task = asyncio.create_task(_run_graph())
+
+    # Poll the queue, yielding events as they arrive
+    while not done.is_set() or not eq.empty():
+        try:
+            event = eq.get_nowait()
+            yield event
+        except queue_module.Empty:
+            await asyncio.sleep(0.1)
+
+    # Drain any remaining events
+    while not eq.empty():
+        yield eq.get_nowait()
+
+    yield {"type": "pipeline_complete", "timestamp": time.time()}

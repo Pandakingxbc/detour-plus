@@ -23,7 +23,7 @@ interface TargetResponse {
   }
 }
 
-interface FeedEvent {
+export interface FeedEvent {
   eventId: string
   tcaUtc: string
   tcaInMinutes: number
@@ -43,6 +43,7 @@ interface LeftPanelContentProps {
   onPrimaryIdChange?: (id: number) => void
   activePrimaryId?: number | null
   onRiskChange?: (risk: FeedEvent["risk"]) => void
+  onFeedUpdate?: (events: FeedEvent[]) => void
 }
 
 function formatUtc(isoValue?: string | null): string {
@@ -81,7 +82,7 @@ function highestRiskFromEvents(events: FeedEvent[]): FeedEvent["risk"] {
   return "LOW"
 }
 
-export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskChange }: LeftPanelContentProps) {
+export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskChange, onFeedUpdate }: LeftPanelContentProps) {
   const [inputNorad, setInputNorad] = useState(DEFAULT_NORAD)
   const [activeNorad, setActiveNorad] = useState<number | null>(null)
 
@@ -128,6 +129,7 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskCha
       const data = (await response.json()) as FeedResponse
       setFeed(data)
       onRiskChange?.(highestRiskFromEvents(data.events))
+      onFeedUpdate?.(data.events)
       if (!data.events.length) {
         setToastMessage(noradId === -1
           ? "No debris threats detected for manual satellite."
@@ -140,7 +142,7 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskCha
     } finally {
       setFeedLoading(false)
     }
-  }, [onRiskChange])
+  }, [onRiskChange, onFeedUpdate])
 
   const loadTarget = useCallback(
     async (noradId: number) => {

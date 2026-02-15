@@ -1,14 +1,19 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { ChevronUp, Play, Square, Loader2 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+
+export interface TerminalDrawerHandle {
+  triggerWithPrompt(prompt: string): void
+}
 
 interface TerminalDrawerProps {
   isOpen: boolean
   onToggle: () => void
   className?: string
+  onManeuverExecuted?: (data: { position: number[]; velocity: number[]; delta_v: number[] }) => void
 }
 
 interface AgentLog {
@@ -31,6 +36,8 @@ function eventToLog(event: Record<string, unknown>, id: number): AgentLog {
   switch (type) {
     case "agent_start":
       return { id, timestamp: ts, text: `${agent}: starting analysis...`, color: "text-cyan-400" }
+    case "llm_call":
+      return { id, timestamp: ts, text: `${agent}: calling LLM (iteration ${event.iteration})...`, color: "text-purple-400" }
     case "tool_calls":
       return {
         id,
@@ -38,6 +45,8 @@ function eventToLog(event: Record<string, unknown>, id: number): AgentLog {
         text: `${agent}: calling tools → ${(event.tools as string[])?.join(", ") ?? ""}`,
         color: "text-yellow-300",
       }
+    case "thinking":
+      return { id, timestamp: ts, text: `${agent}: ${event.text ?? "reasoning..."}`, color: "text-gray-400 italic" }
     case "tool_result":
       return {
         id,
@@ -59,6 +68,8 @@ function eventToLog(event: Record<string, unknown>, id: number): AgentLog {
         text: `${agent}: ${(event.content as string)?.slice(0, 150) ?? ""}`,
         color: "text-blue-300",
       }
+    case "maneuver_executed":
+      return { id, timestamp: ts, text: `${agent}: maneuver applied — updating globe orbit`, color: "text-emerald-400 font-bold" }
     case "pipeline_complete":
       return { id, timestamp: ts, text: "pipeline complete ✓", color: "text-green-500 font-bold" }
     case "error":
@@ -70,7 +81,7 @@ function eventToLog(event: Record<string, unknown>, id: number): AgentLog {
   }
 }
 
-export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerProps) {
+export const TerminalDrawer = forwardRef<TerminalDrawerHandle, TerminalDrawerProps>(function TerminalDrawer({ isOpen, onToggle, className, onManeuverExecuted }, ref) {
   const [logs, setLogs] = useState<AgentLog[]>([
     { id: 0, timestamp: formatTime(), text: "agent terminal ready — click ▶ to run pipeline", color: "text-gray-500" },
   ])
@@ -86,17 +97,24 @@ export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerPr
     }
   }, [logs])
 
-  const startPipeline = useCallback(async () => {
+  const startPipeline = useCallback(async (prompt?: string) => {
     if (running) return
     setRunning(true)
-    setLogs([{ id: 0, timestamp: formatTime(), text: "connecting to agent pipeline...", color: "text-cyan-400" }])
+    const initMsg = prompt
+      ? "auto-triggered by feed data — connecting to agent pipeline..."
+      : "connecting to agent pipeline..."
+    setLogs([{ id: 0, timestamp: formatTime(), text: initMsg, color: "text-cyan-400" }])
     idRef.current = 1
 
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
     try {
-      const res = await fetch("/api/agent/stream?mode=multi", { signal: ctrl.signal })
+      let url = "/api/agent/stream?mode=multi"
+      if (prompt) {
+        url += `&prompt=${encodeURIComponent(prompt)}`
+      }
+      const res = await fetch(url, { signal: ctrl.signal })
 
       if (!res.ok || !res.body) {
         setLogs((prev) => [
@@ -130,6 +148,11 @@ export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerPr
             const event = JSON.parse(line.slice(6))
             const log = eventToLog(event, idRef.current++)
             setLogs((prev) => [...prev, log])
+
+            // Notify parent when the agent executes a maneuver
+            if (event.type === "maneuver_executed" && onManeuverExecuted) {
+              onManeuverExecuted({ position: event.position, velocity: event.velocity, delta_v: event.delta_v ?? [0, 0, 0] })
+            }
           } catch {
             // ignore malformed lines
           }
@@ -146,7 +169,7 @@ export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerPr
       setRunning(false)
       abortRef.current = null
     }
-  }, [running])
+  }, [running, onManeuverExecuted])
 
   const stopPipeline = useCallback(() => {
     abortRef.current?.abort()
@@ -156,6 +179,12 @@ export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerPr
     ])
     setRunning(false)
   }, [])
+
+  useImperativeHandle(ref, () => ({
+    triggerWithPrompt(prompt: string) {
+      void startPipeline(prompt)
+    },
+  }), [startPipeline])
 
   return (
     <div className={cn("pointer-events-auto w-full", className)}>
@@ -212,4 +241,4 @@ export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerPr
       </div>
     </div>
   )
-}
+})

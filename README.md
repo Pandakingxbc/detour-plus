@@ -16,18 +16,18 @@ Detour is an autonomous collision-avoidance system that runs **on-board** a sate
 │  │ triage  │  │ refine   │  │ design   │  │& exec  │  │      │ │
 │  └─────────┘  └──────────┘  └──────────┘  └────────┘  └──────┘ │
 │       ↕             ↕             ↕             ↕               │
-│  ┌──────────────────────────────────────────────────────────┐   │
+│  ┌──────────────────────────────────────────────────────────────┐   │
 │  │              Physics Engine (deterministic)               │   │
 │  │  screening · risk · CW dynamics · RK4 · SGP4 · Chan Pc   │   │
-│  └──────────────────────────────────────────────────────────┘   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │       ↕                                                         │
-│  ┌──────────────────────────────────────────────────────────┐   │
+│  ┌──────────────────────────────────────────────────────────────┐   │
 │  │          Satellite Model (fuel, power, dynamics)          │   │
-│  └──────────────────────────────────────────────────────────┘   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │       ↕                                                         │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  Nemotron 3 Nano 30B (BF16) via vLLM — local inference   │   │
-│  └──────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  Nemotron 3 Nano 30B (NVFP4) via vLLM — local inference  │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -40,8 +40,8 @@ Detour is an autonomous collision-avoidance system that runs **on-board** a sate
 | **Satellite Model** | `engine/models/active_satellite.py` | Full orbital dynamics with resource management (fuel, power, battery) |
 | **Tool Wrappers** | `agents/tools.py` | 11 LangChain tools wrapping the physics engine |
 | **API** | `api/` | FastAPI server with agent, catalog, conjunction, and satellite endpoints |
-| **Frontend** | `frontend2/` | Next.js + React Three Fiber 3D globe with live satellite tracking |
-| **GX10 Setup** | `scripts/setup_gx10.sh` | One-command setup for the ASUS Ascent GX10 |
+| **Frontend** | `frontend/` | Next.js + React Three Fiber 3D globe with live satellite tracking |
+| **Ascent GX10 Setup** | `scripts/setup_gx10.sh` | One-command setup for the ASUS Ascent GX10 |
 
 ## Agent Pipeline
 
@@ -66,15 +66,15 @@ uvicorn api.app:app --reload --port 8000
 ### 2. Frontend
 
 ```bash
-cd frontend2
+cd frontend
 npm install
 npm run dev  # localhost:3000
 ```
 
-### 3. Agent System (with GX10)
+### 3. Agent System (with Ascent GX10)
 
 ```bash
-# Start Nemotron on the GX10
+# Start Nemotron on the Ascent GX10
 chmod +x scripts/setup_gx10.sh
 ./scripts/setup_gx10.sh
 
@@ -112,7 +112,7 @@ In LEO, a debris collision can happen in minutes. You can't wait for the next gr
 
 ## Team
 
-- **Keanu** — Backend, AI Inference, Agent System
-- **Adit** — Data Science, Satellite Model, Agent Design
-- **Justyna** — Edge AI, Satellite Systems
-- **Ethan** — Edge AI, Simulator, 3D Visualization
+- **Justyna** — Frontend, 3D Visualization, UI/UX
+- **Ethan** — ASUS Ascent GX10 Setup, Simulation Logic
+- **Adit** — Satellite Data Feed, Simulation Logic
+- **Keanu** — Ascent GX10 vLLM Setup, LangChain NVIDIA Nemotron Agent System

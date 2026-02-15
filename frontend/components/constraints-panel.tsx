@@ -169,7 +169,7 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
           position: currentState.position,
           velocity: currentState.velocity,
           direction,
-          delta_v_magnitude: 5.0, // 5 m/s per click
+          delta_v_magnitude: 500.0, // 5 m/s per click
         }),
       })
 
