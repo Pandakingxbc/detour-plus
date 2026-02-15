@@ -1,73 +1,50 @@
-# React + TypeScript + Vite
+# frontend2
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Next.js + React + shadcn-style UI for the Detour dashboard.
 
-Currently, two official plugins are available:
+## Stack
+- Next.js (App Router)
+- React + TypeScript
+- Tailwind CSS v4
+- shadcn-style component setup (`components.json`, `lib/utils.ts`, `components/ui/*`)
+- React Three Fiber (`@react-three/fiber`, `@react-three/drei`, `three`)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Globe: Real Earth Mapping
 
-## React Compiler
+### Texture asset
+Place a local equirectangular Earth texture at:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+`public/textures/earth/blue-marble-day.jpg`
 
-## Expanding the ESLint configuration
+Recommended source: NASA Blue Marble (Visible Earth collection).
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Coordinate frame convention
+- Earth mesh is rendered in an Earth-fixed frame.
+- `+Y` = north pole.
+- Longitude `0°` = prime meridian at `+X`.
+- Positive east longitudes map toward `-Z`.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+### Geodetic conversion
+Implemented in `lib/geo.ts`:
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+- `EARTH_RADIUS_KM = 6378.137`
+- `r = 1 + altKm / EARTH_RADIUS_KM`
+- `x = r * cos(latRad) * cos(lonRad)`
+- `y = r * sin(latRad)`
+- `z = -r * cos(latRad) * sin(lonRad)`
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### Object placement pipeline
+`components/globe-view.tsx` maps API objects in this order:
+1. Primary: backend `lat`, `lon`, `alt_km` -> geodetic conversion
+2. Fallback: backend ECI `position` -> previous scaling path
+
+This keeps compatibility while aligning markers to real coastlines when geodetic fields are present.
+
+## Run
+```bash
+cd frontend2
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+Open `http://localhost:3000`.
