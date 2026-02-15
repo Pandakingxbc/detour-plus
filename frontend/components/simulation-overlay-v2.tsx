@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useRef } from "react"
-import { useFrame } from "@react-three/fiber"
+import { useFrame, useThree } from "@react-three/fiber"
 import * as THREE from "three"
 
 import type { SimEngine } from "@/lib/sim-engine"
@@ -65,16 +65,16 @@ function AnimatedSatelliteV2({ engine }: { engine: SimEngine }) {
   return (
     <group>
       <mesh ref={coreRef}>
-        <sphereGeometry args={[0.022, 14, 14]} />
+        <sphereGeometry args={[0.012, 14, 14]} />
         <meshBasicMaterial color="#ffffff" />
       </mesh>
       <mesh ref={glowRef}>
-        <sphereGeometry args={[0.06, 14, 14]} />
-        <meshBasicMaterial color="#22d3ee" transparent opacity={0.4} />
+        <sphereGeometry args={[0.032, 14, 14]} />
+        <meshBasicMaterial color="#22d3ee" transparent opacity={0.45} />
       </mesh>
       <mesh ref={outerRef}>
-        <sphereGeometry args={[0.12, 14, 14]} />
-        <meshBasicMaterial color="#22d3ee" transparent opacity={0.12} />
+        <sphereGeometry args={[0.06, 14, 14]} />
+        <meshBasicMaterial color="#22d3ee" transparent opacity={0.15} />
       </mesh>
       {/* Move flash */}
       <mesh ref={flashRef} visible={false}>
@@ -95,20 +95,11 @@ function DebrisCluster({ engine }: { engine: SimEngine }) {
     const mesh = meshRef.current
     if (!mesh) return
 
-    const satPos = engine.getSatelliteVec3()
-
     for (let i = 0; i < engine.state.debris.length; i++) {
       const p = engine.getDebrisVec3(i)
 
-      // Particles near satellite pulse larger
-      const dx = p.x - satPos.x
-      const dy = p.y - satPos.y
-      const dz = p.z - satPos.z
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
-      const proximityScale = dist < 0.1 ? 0.012 + (0.1 - dist) * 0.08 : 0.01
-
       dummy.position.set(p.x, p.y, p.z)
-      dummy.scale.setScalar(proximityScale)
+      dummy.scale.setScalar(0.0063) // match static debris size
       dummy.updateMatrix()
       mesh.setMatrixAt(i, dummy.matrix)
     }
@@ -308,10 +299,39 @@ function CollisionEffectV2({ engine }: { engine: SimEngine }) {
   )
 }
 
+// --- Camera follow: smoothly track satellite ---
+function CameraFollow({ engine }: { engine: SimEngine }) {
+  const { camera } = useThree()
+  const initialized = useRef(false)
+
+  useFrame(() => {
+    const p = engine.getSatelliteVec3()
+    const target = new THREE.Vector3(p.x, p.y, p.z)
+
+    if (!initialized.current) {
+      // On first frame, snap camera to satellite at a close zoom
+      const dir = target.clone().normalize()
+      camera.position.copy(dir.multiplyScalar(2.8))
+      camera.lookAt(target)
+      initialized.current = true
+      return
+    }
+
+    // Smoothly follow — camera looks at satellite, gently drifts position
+    const dir = target.clone().normalize()
+    const desiredPos = dir.clone().multiplyScalar(camera.position.length())
+    camera.position.lerp(desiredPos, 0.02)
+    camera.lookAt(0, 0, 0) // always look at Earth center so globe stays oriented
+  })
+
+  return null
+}
+
 // --- Top-level overlay ---
 export function SimulationOverlayV2({ engine }: { engine: SimEngine }) {
   return (
     <group>
+      <CameraFollow engine={engine} />
       <DebrisCluster engine={engine} />
       <AnimatedSatelliteV2 engine={engine} />
       <DangerLineV2 engine={engine} />
