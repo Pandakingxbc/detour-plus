@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 
 from api import state
-from api.schemas import OrbitalObjectResponse, TrajectoryResponse, ManualSatelliteRequest
+from api.schemas import OrbitalObjectResponse, TrajectoryResponse, ManualSatelliteRequest, ManualManeuverRequest
 from engine.models.satellite import Satellite
 from tools.propagate import propagate_orbits
 
@@ -180,6 +180,126 @@ async def get_manual_trajectory(request: ManualSatelliteRequest):
         "initial_state": {
             "position": initial_position,
             "velocity": initial_velocity,
+            "epoch": epoch.isoformat(),
+        },
+        "trajectory": {
+            "times": times,
+            "positions": positions,
+            "velocities": velocities,
+        },
+    }
+
+
+@router.post("/manual/maneuver")
+async def apply_manual_maneuver(request: ManualManeuverRequest):
+    """
+    Apply delta-v maneuver to manual satellite.
+    Generates new elliptical trajectory using numerical propagation.
+    """
+    import numpy as np
+
+    # Get current manual satellite state from storage
+    # Note: In production, this would come from the frontend state
+    # For now, we'll need the frontend to send current state or retrieve from backend state
+    # This endpoint assumes manual satellite state is stored in backend
+
+    # For this implementation, we need to get the state from somewhere
+    # Let's return an error for now and handle it properly with state management
+    raise HTTPException(
+        status_code=501,
+        detail="Maneuver endpoint requires current satellite state. Please implement state retrieval."
+    )
+
+
+@router.post("/manual/maneuver-from-state")
+async def apply_maneuver_from_state(request: dict):
+    """
+    Apply delta-v maneuver given current state.
+    Returns new state + elliptical trajectory.
+    """
+    import numpy as np
+    import math
+
+    # Extract current state
+    current_pos = np.array(request.get("position", []))
+    current_vel = np.array(request.get("velocity", []))
+    direction = request.get("direction", "")
+    delta_v_mag = float(request.get("delta_v_magnitude", 0))
+
+    if len(current_pos) != 3 or len(current_vel) != 3:
+        raise HTTPException(status_code=400, detail="Invalid state vectors")
+
+    # Calculate orbital frame (Hill/LVLH frame)
+    # Radial: unit vector pointing away from Earth
+    r_hat = current_pos / np.linalg.norm(current_pos)
+
+    # Normal: perpendicular to orbital plane
+    h_vec = np.cross(current_pos, current_vel)  # Angular momentum
+    n_hat = h_vec / np.linalg.norm(h_vec)
+
+    # Tangential/Along-track: perpendicular to radial and normal
+    t_hat = np.cross(n_hat, r_hat)
+
+    # Calculate delta-v vector based on direction
+    if direction == "radial-out":
+        delta_v = r_hat * delta_v_mag
+    elif direction == "radial-in":
+        delta_v = -r_hat * delta_v_mag
+    elif direction == "prograde":
+        delta_v = t_hat * delta_v_mag
+    elif direction == "retrograde":
+        delta_v = -t_hat * delta_v_mag
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown direction: {direction}")
+
+    # Apply delta-v to velocity
+    new_velocity = current_vel + delta_v
+    new_position = current_pos.copy()  # Position doesn't change instantaneously
+    epoch = datetime.now(timezone.utc)
+
+    # Generate new trajectory using numerical propagation (RK4)
+    # This will create an elliptical orbit
+    from engine.physics.solver import RK4Solver
+    from engine.physics.forces import NewtonianGravity, J2Perturbation, CompositeForce
+    from engine.physics.state import State as PhysicsState
+
+    force_model = CompositeForce(NewtonianGravity(), J2Perturbation())
+    solver = RK4Solver(force_model)
+
+    # Propagate for 2 orbital periods (estimate)
+    GM = 398600.4418e9
+    r = np.linalg.norm(new_position)
+    v = np.linalg.norm(new_velocity)
+
+    # Semi-major axis approximation
+    energy = v**2 / 2 - GM / r
+    a = -GM / (2 * energy) if energy < 0 else r
+    period = 2 * math.pi * math.sqrt(a**3 / GM) if a > 0 else 5400
+    duration = min(period * 2, 10800)  # Max 3 hours
+
+    dt_prop = 10  # 10 second propagation steps
+    num_steps = int(duration / dt_prop)
+
+    times = []
+    positions = []
+    velocities = []
+
+    phys_state = PhysicsState(new_position.copy(), new_velocity.copy())
+
+    for i in range(num_steps):
+        t = i * dt_prop
+        times.append(t)
+        positions.append(phys_state.r.tolist())
+        velocities.append(phys_state.v.tolist())
+
+        if i < num_steps - 1:
+            phys_state = solver.step(phys_state, dt_prop)
+
+    return {
+        "norad_id": -1,
+        "initial_state": {
+            "position": new_position.tolist(),
+            "velocity": new_velocity.tolist(),
             "epoch": epoch.isoformat(),
         },
         "trajectory": {

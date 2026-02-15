@@ -54,6 +54,8 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
   const [manualRaan, setManualRaan] = useState("0") // degrees
   const [manualLoading, setManualLoading] = useState(false)
   const [manualFeedback, setManualFeedback] = useState<string | null>(null)
+  const [manualSatelliteActive, setManualSatelliteActive] = useState(false)
+  const [maneuvering, setManeuvering] = useState(false)
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -133,11 +135,65 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
 
       onManualSatelliteLoad?.(data.trajectory)
       setManualFeedback("Manual satellite loaded!")
+      setManualSatelliteActive(true)
     } catch (error) {
       setManualFeedback("Failed to load manual satellite")
       console.error(error)
     } finally {
       setManualLoading(false)
+    }
+  }
+
+  const applyManeuver = async (direction: "radial-out" | "radial-in" | "prograde" | "retrograde") => {
+    setManeuvering(true)
+    setManualFeedback(null)
+
+    try {
+      // Get current satellite state
+      const stateResponse = await fetch("/api/manual-satellite-state")
+      if (!stateResponse.ok) {
+        throw new Error("Failed to get current satellite state")
+      }
+      const currentState = await stateResponse.json()
+
+      // Apply maneuver with current state
+      const response = await fetch("http://localhost:8000/api/objects/manual/maneuver-from-state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          position: currentState.position,
+          velocity: currentState.velocity,
+          direction,
+          delta_v_magnitude: 500.0, // 5 m/s per click
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const data = await response.json()
+
+      // Update server state with new trajectory
+      await fetch("/api/manual-satellite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          position: data.initial_state.position,
+          velocity: data.initial_state.velocity,
+          epoch: data.initial_state.epoch,
+          trajectory: data.trajectory,
+        }),
+      })
+
+      // Update visualization
+      onManualSatelliteLoad?.(data.trajectory)
+      setManualFeedback(`Maneuver applied: ${direction}`)
+    } catch (error) {
+      setManualFeedback("Maneuver failed")
+      console.error(error)
+    } finally {
+      setManeuvering(false)
     }
   }
 
@@ -306,6 +362,72 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
 
         {manualFeedback ? <p className="text-xs text-cyan-300">{manualFeedback}</p> : null}
       </form>
+
+      {manualSatelliteActive && (
+        <div className="space-y-3 rounded-md border border-emerald-500/40 bg-emerald-500/5 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Maneuver Controls</p>
+          <p className="text-[10px] text-muted-foreground">
+            Apply delta-v to change orbit (5 m/s per click)
+          </p>
+
+          <div className="flex flex-col items-center gap-2">
+            {/* Up: Radial Out */}
+            <button
+              type="button"
+              onClick={() => applyManeuver("radial-out")}
+              disabled={maneuvering}
+              className="flex h-10 w-10 items-center justify-center rounded-md border border-emerald-500/60 bg-emerald-500/20 text-emerald-200 transition-colors hover:bg-emerald-500/30 disabled:opacity-50"
+              title="Radial Out (away from Earth)"
+            >
+              ↑
+            </button>
+
+            <div className="flex gap-2">
+              {/* Left: Retrograde */}
+              <button
+                type="button"
+                onClick={() => applyManeuver("retrograde")}
+                disabled={maneuvering}
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-emerald-500/60 bg-emerald-500/20 text-emerald-200 transition-colors hover:bg-emerald-500/30 disabled:opacity-50"
+                title="Retrograde (slow down)"
+              >
+                ←
+              </button>
+
+              <div className="flex h-10 w-10 items-center justify-center text-xs text-muted-foreground">
+                {maneuvering ? "..." : "Δv"}
+              </div>
+
+              {/* Right: Prograde */}
+              <button
+                type="button"
+                onClick={() => applyManeuver("prograde")}
+                disabled={maneuvering}
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-emerald-500/60 bg-emerald-500/20 text-emerald-200 transition-colors hover:bg-emerald-500/30 disabled:opacity-50"
+                title="Prograde (speed up)"
+              >
+                →
+              </button>
+            </div>
+
+            {/* Down: Radial In */}
+            <button
+              type="button"
+              onClick={() => applyManeuver("radial-in")}
+              disabled={maneuvering}
+              className="flex h-10 w-10 items-center justify-center rounded-md border border-emerald-500/60 bg-emerald-500/20 text-emerald-200 transition-colors hover:bg-emerald-500/30 disabled:opacity-50"
+              title="Radial In (toward Earth)"
+            >
+              ↓
+            </button>
+          </div>
+
+          <div className="text-[10px] text-muted-foreground space-y-0.5">
+            <p>↑ Radial+ (away) • ↓ Radial- (toward)</p>
+            <p>→ Prograde (speed up) • ← Retrograde (slow down)</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
