@@ -148,15 +148,23 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
   const [feed, setFeed] = useState<ConjunctionEventResponse[]>(MOCK_FEED)
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [feedLoading, setFeedLoading] = useState(false)
-  const [detailsError, setDetailsError] = useState<string | null>(null)
-  const [feedError, setFeedError] = useState<string | null>(null)
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
 
   const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api"
+
+  useEffect(() => {
+    if (!toastMessage) return
+
+    const timer = window.setTimeout(() => {
+      setToastMessage(null)
+    }, 2800)
+
+    return () => window.clearTimeout(timer)
+  }, [toastMessage])
 
   const loadFeed = useCallback(
     async (primaryId: number) => {
       setFeedLoading(true)
-      setFeedError(null)
 
       try {
         const response = await fetch(
@@ -172,11 +180,11 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
           setFeed(events.slice(0, DEFAULT_FEED_ROWS))
         } else {
           setFeed(MOCK_FEED)
-          setFeedError("No conjunctions returned yet. Showing demo feed.")
+          setToastMessage("No conjunctions returned yet. Showing demo feed.")
         }
       } catch {
         setFeed(MOCK_FEED)
-        setFeedError("Live feed unavailable. Showing demo feed.")
+        setToastMessage("Live feed unavailable. Showing demo feed.")
       } finally {
         setFeedLoading(false)
       }
@@ -187,7 +195,6 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
   const loadTarget = useCallback(
     async (noradId: number) => {
       setDetailsLoading(true)
-      setDetailsError(null)
       setActiveNorad(noradId)
       onPrimaryIdChange?.(noradId)
 
@@ -201,7 +208,7 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
         setDetails(data)
       } catch {
         setDetails(null)
-        setDetailsError("Unable to load object details from backend.")
+        setToastMessage("Unable to load object details from backend.")
       } finally {
         setDetailsLoading(false)
       }
@@ -236,7 +243,7 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
 
     const parsed = Number(inputNorad.trim())
     if (!Number.isInteger(parsed) || parsed <= 0) {
-      setDetailsError("Enter a valid NORAD ID.")
+      setToastMessage("Enter a valid NORAD ID.")
       return
     }
 
@@ -244,7 +251,13 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="relative flex h-full min-h-0 flex-col gap-4">
+      {toastMessage ? (
+        <div className="pointer-events-none absolute right-0 top-0 z-20 rounded-md border border-amber-500/45 bg-black/85 px-3 py-2 text-xs text-amber-200 shadow-lg backdrop-blur-sm">
+          {toastMessage}
+        </div>
+      ) : null}
+
       <form className="space-y-2" onSubmit={onSubmit}>
         <label htmlFor="norad-id" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           NORAD ID
@@ -271,8 +284,6 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
 
       <section className="rounded-md border border-border/70 bg-background/45 p-3">
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Live Target Details</p>
-
-        {detailsError ? <p className="mb-2 text-xs text-amber-300">{detailsError}</p> : null}
 
         <dl className="space-y-2 text-sm">
           <div className="flex items-start justify-between gap-3">
@@ -317,8 +328,6 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
           </button>
         </div>
 
-        {feedError ? <p className="mb-2 text-xs text-amber-300">{feedError}</p> : null}
-
         <div className="max-h-[46vh] overflow-auto rounded-md border border-border/60">
           <table className="w-full border-collapse text-xs">
             <thead className="sticky top-0 bg-black/60 text-muted-foreground">
@@ -346,7 +355,6 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
           </table>
         </div>
 
-        <p className="mt-2 text-[11px] text-muted-foreground">Read-only feed for visualization only.</p>
       </section>
     </div>
   )
