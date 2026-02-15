@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
   }
 
   const noradId = Number.parseInt(noradRaw, 10)
-  if (!Number.isInteger(noradId) || noradId <= 0) {
+  if (!Number.isInteger(noradId) || (noradId <= 0 && noradId !== -1)) {
     return NextResponse.json({ error: "Invalid NORAD ID" }, { status: 400 })
   }
 

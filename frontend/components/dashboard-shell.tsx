@@ -7,6 +7,7 @@ import {
   ConstraintsPanel,
   type ApplyConstraintsResult,
   type PlannerConstraints,
+  type ManualSatelliteData,
 } from "@/components/constraints-panel"
 import { DashboardHeader } from "@/components/dashboard-header"
 import { GlobeView } from "@/components/globe-view"
@@ -27,6 +28,7 @@ export function DashboardShell() {
   const [rightCollapsed, setRightCollapsed] = useState(false)
   const [activePrimaryId, setActivePrimaryId] = useState<number | null>(25544)
   const [appliedConstraints, setAppliedConstraints] = useState<PlannerConstraints>(DEFAULT_CONSTRAINTS)
+  const [manualSatelliteData, setManualSatelliteData] = useState<ManualSatelliteData | null>(null)
 
   const panelColumns = useMemo(() => {
     const leftWidth = leftCollapsed ? "4.75rem" : "22rem"
@@ -71,9 +73,14 @@ export function DashboardShell() {
     }
   }
 
+  const handleManualSatelliteLoad = (data: ManualSatelliteData) => {
+    setManualSatelliteData(data)
+    setActivePrimaryId(-1)
+  }
+
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-background text-foreground">
-      <GlobeView compacted={terminalOpen} noradId={activePrimaryId} />
+      <GlobeView compacted={terminalOpen} noradId={activePrimaryId} manualSatelliteData={manualSatelliteData} />
 
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 p-6">
         <div className="pointer-events-auto mx-auto w-full max-w-[1600px]">
@@ -94,7 +101,7 @@ export function DashboardShell() {
             icon={Activity}
             title="Target + Live Feed"
           >
-            <LeftPanelContent onPrimaryIdChange={setActivePrimaryId} />
+            <LeftPanelContent onPrimaryIdChange={setActivePrimaryId} activePrimaryId={activePrimaryId} />
           </SidePanel>
 
           <div className="hidden lg:block lg:col-start-2 lg:row-start-1" />
@@ -107,7 +114,11 @@ export function DashboardShell() {
             icon={SlidersHorizontal}
             title="Constraints"
           >
-            <ConstraintsPanel appliedConstraints={appliedConstraints} onApply={handleApplyConstraints} />
+            <ConstraintsPanel
+              appliedConstraints={appliedConstraints}
+              onApply={handleApplyConstraints}
+              onManualSatelliteLoad={handleManualSatelliteLoad}
+            />
           </SidePanel>
 
           <TerminalDrawer

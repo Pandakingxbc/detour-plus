@@ -39,6 +39,7 @@ interface FeedResponse {
 
 interface LeftPanelContentProps {
   onPrimaryIdChange?: (id: number) => void
+  activePrimaryId?: number | null
 }
 
 function formatUtc(isoValue?: string | null): string {
@@ -71,9 +72,17 @@ function riskClassName(risk: FeedEvent["risk"]): string {
   return "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
 }
 
-export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
+export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId }: LeftPanelContentProps) {
   const [inputNorad, setInputNorad] = useState(DEFAULT_NORAD)
   const [activeNorad, setActiveNorad] = useState<number | null>(null)
+
+  // Sync internal state with prop
+  useEffect(() => {
+    if (activePrimaryId !== undefined) {
+      setActiveNorad(activePrimaryId)
+    }
+  }, [activePrimaryId])
+
   const [target, setTarget] = useState<TargetResponse | null>(null)
   const [feed, setFeed] = useState<FeedResponse | null>(null)
   const [detailsLoading, setDetailsLoading] = useState(false)
@@ -93,17 +102,21 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
     try {
       const response = await fetch(`/api/feed?norad=${noradId}&maxEvents=${DEFAULT_MAX_ROWS}`)
       if (!response.ok) {
-        throw new Error(`Feed request failed (${response.status})`)
+        const error = await response.json()
+        throw new Error(error.detail || `Feed request failed (${response.status})`)
       }
 
       const data = (await response.json()) as FeedResponse
       setFeed(data)
       if (!data.events.length) {
-        setToastMessage("No conjunction events found in the selected horizon.")
+        setToastMessage(noradId === -1
+          ? "No debris threats detected for manual satellite."
+          : "No conjunction events found in the selected horizon.")
       }
-    } catch {
+    } catch (err) {
       setFeed(null)
-      setToastMessage("Live conjunction feed unavailable.")
+      setToastMessage(err instanceof Error ? err.message : "Live conjunction feed unavailable.")
+      console.error("Feed load error:", err)
     } finally {
       setFeedLoading(false)
     }
@@ -139,6 +152,13 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
     const defaultId = Number(DEFAULT_NORAD)
     void loadTarget(defaultId)
   }, [loadTarget])
+
+  // Load feed when activeNorad changes (including manual satellite)
+  useEffect(() => {
+    if (activeNorad !== null && activeNorad !== Number(DEFAULT_NORAD)) {
+      void loadFeed(activeNorad)
+    }
+  }, [activeNorad, loadFeed])
 
   useEffect(() => {
     if (!activeNorad) return
@@ -194,34 +214,43 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
         </div>
       </form>
 
-      <section className="rounded-md border border-border/70 bg-background/45 p-3">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Live Target Details</p>
+      {activeNorad !== -1 ? (
+        <section className="rounded-md border border-border/70 bg-background/45 p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Live Target Details</p>
 
-        <dl className="space-y-2 text-sm">
-          <div className="flex items-start justify-between gap-3">
-            <dt className="text-muted-foreground">Name / Type</dt>
-            <dd className="text-right text-foreground">
-              {target ? `${target.name || "Unknown"} (${target.objectType || "unknown"})` : "--"}
-            </dd>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <dt className="text-muted-foreground">Orbit Class</dt>
-            <dd>{target?.orbitClass ?? "--"}</dd>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <dt className="text-muted-foreground">Altitude Estimate</dt>
-            <dd>{target ? `${target.altitudeKm.toFixed(2)} km` : "--"}</dd>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <dt className="text-muted-foreground">Inclination Estimate</dt>
-            <dd>{target?.inclinationDeg !== null && target?.inclinationDeg !== undefined ? `${target.inclinationDeg.toFixed(2)}°` : "--"}</dd>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <dt className="text-muted-foreground">Last Updated</dt>
-            <dd>{formatUtc(target?.lastUpdatedUtc)}</dd>
-          </div>
-        </dl>
-      </section>
+          <dl className="space-y-2 text-sm">
+            <div className="flex items-start justify-between gap-3">
+              <dt className="text-muted-foreground">Name / Type</dt>
+              <dd className="text-right text-foreground">
+                {target ? `${target.name || "Unknown"} (${target.objectType || "unknown"})` : "--"}
+              </dd>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <dt className="text-muted-foreground">Orbit Class</dt>
+              <dd>{target?.orbitClass ?? "--"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <dt className="text-muted-foreground">Altitude Estimate</dt>
+              <dd>{target ? `${target.altitudeKm.toFixed(2)} km` : "--"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <dt className="text-muted-foreground">Inclination Estimate</dt>
+              <dd>{target?.inclinationDeg !== null && target?.inclinationDeg !== undefined ? `${target.inclinationDeg.toFixed(2)}°` : "--"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <dt className="text-muted-foreground">Last Updated</dt>
+              <dd>{formatUtc(target?.lastUpdatedUtc)}</dd>
+            </div>
+          </dl>
+        </section>
+      ) : (
+        <section className="rounded-md border border-cyan-500/40 bg-cyan-500/5 p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-cyan-300">Manual Satellite Active</p>
+          <p className="text-xs text-muted-foreground">
+            Conjunction feed shows real debris threats to your manual satellite.
+          </p>
+        </section>
+      )}
 
       <section className="min-h-0 flex flex-1 flex-col rounded-md border border-border/70 bg-background/45 p-3">
         <div className="mb-2 shrink-0 flex items-center justify-between gap-2">

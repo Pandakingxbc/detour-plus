@@ -18,9 +18,17 @@ export interface ApplyConstraintsResult {
   appliedAt: string
 }
 
+export interface ManualSatelliteData {
+  norad_id: number
+  times: number[]
+  positions: number[][]
+  velocities: number[][]
+}
+
 interface ConstraintsPanelProps {
   appliedConstraints: PlannerConstraints
   onApply: (next: PlannerConstraints) => Promise<ApplyConstraintsResult>
+  onManualSatelliteLoad?: (data: ManualSatelliteData) => void
 }
 
 function constraintsEqual(a: PlannerConstraints, b: PlannerConstraints): boolean {
@@ -32,12 +40,18 @@ function constraintsEqual(a: PlannerConstraints, b: PlannerConstraints): boolean
   )
 }
 
-export function ConstraintsPanel({ appliedConstraints, onApply }: ConstraintsPanelProps) {
+export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatelliteLoad }: ConstraintsPanelProps) {
   const [draft, setDraft] = useState<PlannerConstraints>(appliedConstraints)
   const [applying, setApplying] = useState(false)
   const [feedback, setFeedback] = useState<ApplyConstraintsResult | null>(null)
 
   const isDirty = useMemo(() => !constraintsEqual(draft, appliedConstraints), [draft, appliedConstraints])
+
+  // Manual satellite state (defaults: 400km altitude LEO)
+  const [manualRadius, setManualRadius] = useState("6771") // Earth radius + 400km
+  const [manualSpeed, setManualSpeed] = useState("7670") // Circular orbit speed at 400km
+  const [manualLoading, setManualLoading] = useState(false)
+  const [manualFeedback, setManualFeedback] = useState<string | null>(null)
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -59,9 +73,66 @@ export function ConstraintsPanel({ appliedConstraints, onApply }: ConstraintsPan
     }
   }
 
+  const onManualSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setManualLoading(true)
+    setManualFeedback(null)
+
+    try {
+      const radiusKm = parseFloat(manualRadius)
+      const speedMps = parseFloat(manualSpeed)
+
+      if (isNaN(radiusKm) || isNaN(speedMps)) {
+        setManualFeedback("Invalid radius or speed value")
+        return
+      }
+
+      if (radiusKm < 6371 || radiusKm > 50000) {
+        setManualFeedback("Radius must be between 6371 km (Earth surface) and 50000 km")
+        return
+      }
+
+      const response = await fetch("http://localhost:8000/api/objects/manual/trajectory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          radius_km: radiusKm,
+          speed_mps: speedMps,
+          dt: 1 // 1 second timestep for smooth real-time animation
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const data = await response.json()
+
+      // Store state vectors + trajectory in server state for conjunction detection
+      await fetch("/api/manual-satellite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          position: data.initial_state.position,
+          velocity: data.initial_state.velocity,
+          epoch: data.initial_state.epoch,
+          trajectory: data.trajectory,
+        }),
+      })
+
+      onManualSatelliteLoad?.(data.trajectory)
+      setManualFeedback("Manual satellite loaded!")
+    } catch (error) {
+      setManualFeedback("Failed to load manual satellite")
+      console.error(error)
+    } finally {
+      setManualLoading(false)
+    }
+  }
+
   return (
-    <form className="flex h-full min-h-0 flex-col gap-4" onSubmit={onSubmit}>
-      <div className="space-y-3 rounded-md border border-border/70 bg-background/45 p-3">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
+      <form className="space-y-3 rounded-md border border-border/70 bg-background/45 p-3" onSubmit={onSubmit}>
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Planner Constraints</p>
 
         <div className="space-y-1.5">
@@ -121,9 +192,7 @@ export function ConstraintsPanel({ appliedConstraints, onApply }: ConstraintsPan
             className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-primary/60"
           />
         </div>
-      </div>
 
-      <div className="mt-auto rounded-md border border-border/70 bg-background/45 p-3">
         <button
           type="submit"
           disabled={applying || !isDirty}
@@ -133,18 +202,61 @@ export function ConstraintsPanel({ appliedConstraints, onApply }: ConstraintsPan
           Apply
         </button>
 
-        <p className="mt-2 text-xs text-muted-foreground">
-          {isDirty
-            ? "Constraints changed. Replan occurs only after Apply."
-            : "No pending changes."}
+        <p className="text-xs text-muted-foreground">
+          {isDirty ? "Constraints changed. Replan occurs only after Apply." : "No pending changes."}
         </p>
 
         {feedback ? (
-          <p className={`mt-2 text-xs ${feedback.ok ? "text-emerald-300" : "text-amber-300"}`}>
+          <p className={`text-xs ${feedback.ok ? "text-emerald-300" : "text-amber-300"}`}>
             {feedback.message}
           </p>
         ) : null}
-      </div>
-    </form>
+      </form>
+
+      <form className="space-y-3 rounded-md border border-cyan-500/40 bg-cyan-500/5 p-3" onSubmit={onManualSubmit}>
+        <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Manual Satellite</p>
+
+        <div className="space-y-1.5">
+          <label htmlFor="manual-radius" className="text-xs text-muted-foreground">
+            Radius (km from Earth center)
+          </label>
+          <input
+            id="manual-radius"
+            type="number"
+            step="1"
+            value={manualRadius}
+            onChange={(e) => setManualRadius(e.target.value)}
+            className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-cyan-500/60"
+            placeholder="6771"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label htmlFor="manual-speed" className="text-xs text-muted-foreground">
+            Speed (m/s)
+          </label>
+          <input
+            id="manual-speed"
+            type="number"
+            step="1"
+            value={manualSpeed}
+            onChange={(e) => setManualSpeed(e.target.value)}
+            className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-cyan-500/60"
+            placeholder="7670"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={manualLoading}
+          className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-cyan-500/60 bg-cyan-500/20 text-sm font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-55"
+        >
+          {manualLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Load Manual Satellite
+        </button>
+
+        {manualFeedback ? <p className="text-xs text-cyan-300">{manualFeedback}</p> : null}
+      </form>
+    </div>
   )
 }
