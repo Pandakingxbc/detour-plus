@@ -21,12 +21,6 @@ const DEFAULT_CONSTRAINTS: PlannerConstraints = {
   horizonHours: 24,
 }
 
-function axisToDeltaV(axis: PlannerConstraints["preferredAxis"], magnitude: number): [number, number, number] {
-  if (axis === "radial") return [0, magnitude, 0]
-  if (axis === "cross") return [0, 0, magnitude]
-  return [magnitude, 0, 0]
-}
-
 export function DashboardShell() {
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [leftCollapsed, setLeftCollapsed] = useState(false)
@@ -41,46 +35,37 @@ export function DashboardShell() {
   }, [leftCollapsed, rightCollapsed])
 
   const handleApplyConstraints = async (next: PlannerConstraints): Promise<ApplyConstraintsResult> => {
-    setAppliedConstraints(next)
-
-    if (!activePrimaryId) {
-      return {
-        ok: false,
-        message: "Applied locally. Set a valid NORAD ID to sync backend checks.",
-        appliedAt: new Date().toISOString(),
-      }
-    }
-
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api"
-    const [dvX, dvY, dvZ] = axisToDeltaV(next.preferredAxis, next.maxTotalDeltaV)
-    const params = new URLSearchParams({
-      primary_id: String(activePrimaryId),
-      remaining_fuel_kg: "50",
-      burn_time_sec: "0",
-      secondary_conjunction_count: "0",
-    })
-    params.append("delta_v", dvX.toFixed(6))
-    params.append("delta_v", dvY.toFixed(6))
-    params.append("delta_v", dvZ.toFixed(6))
-
     try {
-      const response = await fetch(`${apiBase}/maneuvers/check-constraints?${params.toString()}`, {
+      const response = await fetch("/api/constraints", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(next),
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
-      const result = (await response.json()) as { overall_pass?: boolean }
+      const result = (await response.json()) as {
+        ok?: boolean
+        message?: string
+        constraints?: PlannerConstraints
+      }
+      if (result.constraints) {
+        setAppliedConstraints(result.constraints)
+      } else {
+        setAppliedConstraints(next)
+      }
+
       return {
-        ok: true,
-        message: result.overall_pass
-          ? "Applied. Backend planner constraints check passed."
-          : "Applied. Backend check reports one or more constraint violations.",
+        ok: result.ok ?? true,
+        message: result.message ?? "Constraints applied.",
         appliedAt: new Date().toISOString(),
       }
     } catch {
+      setAppliedConstraints(next)
       return {
         ok: false,
-        message: "Applied locally; backend planner check is currently unavailable.",
+        message: "Applied locally; backend constraints service is unavailable.",
         appliedAt: new Date().toISOString(),
       }
     }
@@ -88,7 +73,7 @@ export function DashboardShell() {
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-background text-foreground">
-      <GlobeView compacted={terminalOpen} />
+      <GlobeView compacted={terminalOpen} noradId={activePrimaryId} />
 
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 p-6">
         <div className="pointer-events-auto mx-auto w-full max-w-[1600px]">
