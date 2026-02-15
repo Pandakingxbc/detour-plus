@@ -16,6 +16,8 @@ const DEBRIS_REFRESH_MS = 1000
 const DEBRIS_ORBIT_CLASSES = "LEO"
 const ORBIT_REFRESH_MS = 30_000
 const TARGET_TICK_MS = 1000
+const TRAIL_FRACTION = 0.20 // Show ~20% of orbit as visible trail arc
+const MIN_TRAIL_POINTS = 10
 
 interface DebrisObject {
   noradId: number
@@ -279,13 +281,38 @@ function OrbitTrack({ points, isManual }: { points: THREE.Vector3[]; isManual?: 
   return <Line points={linePoints} color={color} transparent opacity={0.95} lineWidth={1.4} />
 }
 
-function TargetMarker({ point, isManual }: { point: THREE.Vector3 | null; isManual?: boolean }) {
-  if (!point) return null
+function TargetMarker({ orbitTrack, isManual }: { orbitTrack: OrbitTrackState; isManual?: boolean }) {
+  const meshRef = useRef<THREE.Mesh>(null)
+
+  useFrame(() => {
+    if (!meshRef.current || orbitTrack.points.length < 2) return
+
+    const stepMs = orbitTrack.stepSec * 1000
+    if (!Number.isFinite(stepMs) || stepMs <= 0) {
+      meshRef.current.position.copy(orbitTrack.points[0])
+      return
+    }
+
+    const elapsedMs = Math.max(0, Date.now() - orbitTrack.timeStartMs)
+    const totalDurationMs = (orbitTrack.points.length - 1) * stepMs
+    const loopedMs = totalDurationMs > 0 ? elapsedMs % totalDurationMs : 0
+    const rawIndex = loopedMs / stepMs
+    const index = Math.min(Math.floor(rawIndex), orbitTrack.points.length - 2)
+    const alpha = rawIndex - index
+
+    meshRef.current.position.lerpVectors(
+      orbitTrack.points[index],
+      orbitTrack.points[index + 1],
+      alpha
+    )
+  })
+
+  if (orbitTrack.points.length === 0) return null
 
   const color = isManual ? "#10b981" : "#22d3ee"
 
   return (
-    <mesh position={point}>
+    <mesh ref={meshRef}>
       <sphereGeometry args={[0.012, 14, 14]} />
       <meshBasicMaterial color={color} />
     </mesh>
@@ -294,14 +321,14 @@ function TargetMarker({ point, isManual }: { point: THREE.Vector3 | null; isManu
 
 function Scene({
   debrisPositions,
-  orbitPoints,
-  currentTargetPoint,
+  trailPoints,
+  orbitTrack,
   isManualSatellite,
   simEngine,
 }: {
   debrisPositions: THREE.Vector3[]
-  orbitPoints: THREE.Vector3[]
-  currentTargetPoint: THREE.Vector3 | null
+  trailPoints: THREE.Vector3[]
+  orbitTrack: OrbitTrackState
   isManualSatellite: boolean
   simEngine?: SimEngine | null
 }) {
@@ -321,8 +348,8 @@ function Scene({
       <Earth />
       <Graticule />
       <Atmosphere />
-      {!isRealtimeSim && <OrbitTrack points={orbitPoints} isManual={isManualSatellite} />}
-      {!isRealtimeSim && <TargetMarker point={currentTargetPoint} isManual={isManualSatellite} />}
+      {!isRealtimeSim && <OrbitTrack points={trailPoints} isManual={isManualSatellite} />}
+      {!isRealtimeSim && <TargetMarker orbitTrack={orbitTrack} isManual={isManualSatellite} />}
       {debrisPositions.length > 0 && !isRealtimeSim ? <StaticObjects positions={debrisPositions} /> : null}
       {simEngine && <SimulationOverlayV2 engine={simEngine} />}
       <OrbitControls enablePan enableZoom minDistance={1.5} maxDistance={20} enableDamping dampingFactor={0.05} />
@@ -502,20 +529,33 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
     }
   }, [noradId, manualSatelliteData])
 
-  const currentTargetPoint = useMemo(() => {
-    if (orbitTrack.points.length === 0) return null
+  const currentIndex = useMemo(() => {
+    if (orbitTrack.points.length === 0) return 0
 
     const stepMs = orbitTrack.stepSec * 1000
-    if (!Number.isFinite(stepMs) || stepMs <= 0) return orbitTrack.points[0]
+    if (!Number.isFinite(stepMs) || stepMs <= 0) return 0
 
     const elapsedMs = Math.max(0, currentTimeMs - orbitTrack.timeStartMs)
-    // Loop continuously by using modulo
-    const totalDurationMs = orbitTrack.points.length * stepMs
-    const loopedElapsedMs = totalDurationMs > 0 ? elapsedMs % totalDurationMs : 0
-    const index = Math.floor(loopedElapsedMs / stepMs) % orbitTrack.points.length
+    const totalDurationMs = (orbitTrack.points.length - 1) * stepMs
+    if (totalDurationMs <= 0) return 0
 
-    return orbitTrack.points[index] ?? orbitTrack.points[0]
+    const loopedMs = elapsedMs % totalDurationMs
+    return Math.min(Math.floor(loopedMs / stepMs), orbitTrack.points.length - 1)
   }, [currentTimeMs, orbitTrack])
+
+  const trailPoints = useMemo(() => {
+    const points = orbitTrack.points
+    if (points.length < 2) return points
+
+    const trailLength = Math.max(MIN_TRAIL_POINTS, Math.floor(points.length * TRAIL_FRACTION))
+    // Show a segment: some points behind the satellite, rest ahead
+    const behindCount = Math.max(2, Math.floor(trailLength * 0.3))
+    const aheadCount = trailLength - behindCount
+    const startIndex = Math.max(0, currentIndex - behindCount)
+    const endIndex = Math.min(points.length, currentIndex + aheadCount + 1)
+
+    return points.slice(startIndex, endIndex)
+  }, [orbitTrack.points, currentIndex])
 
   return (
     <div
@@ -532,8 +572,8 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
       >
         <Scene
           debrisPositions={debrisPositions}
-          orbitPoints={orbitTrack.points}
-          currentTargetPoint={currentTargetPoint}
+          trailPoints={trailPoints}
+          orbitTrack={orbitTrack}
           isManualSatellite={noradId === -1}
           simEngine={simEngine}
         />

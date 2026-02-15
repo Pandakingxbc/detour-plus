@@ -1,130 +1,123 @@
 """
-estimate_risk() — composite risk assessment using Chan probability,
-Gaussian fallback, and optional Monte Carlo.
-"""
+risk.py — Detailed risk assessment using Chan collision probability.
 
+Computes composite probability of collision (PoC), covariance integration,
+and risk scoring for conjunction events.
+"""
 from __future__ import annotations
 
-from typing import Dict, Optional
+import logging
+from typing import Any, Dict, Optional
 
 import numpy as np
 
-from engine.data.data_sources import OrbitalObject
-from engine.data.tle_entity_factory import entity_from_tle
-from engine.engine.engine2 import Engine2
-from engine.physics.probability import collision_probability
-from engine.config.settings import COLLISION_RADIUS, MC_DEFAULT_N
+from engine.config.settings import GM, RE, COLLISION_RADIUS
+from engine.physics.chan_probability import chan_collision_probability
+from engine.physics.entity import Entity
+from engine.physics.state import State
+
+logger = logging.getLogger("detour.tools.risk")
 
 
-def estimate_risk(
-    primary: OrbitalObject,
-    secondary: OrbitalObject,
-    tca_offset_sec: float = 0.0,
+def assess_conjunction_risk(
+    primary_pos: np.ndarray,
+    primary_vel: np.ndarray,
+    secondary_pos: np.ndarray,
+    secondary_vel: np.ndarray,
+    covariance_diag: Optional[list] = None,
     miss_distance_m: Optional[float] = None,
-    rel_pos: Optional[np.ndarray] = None,
-    rel_vel: Optional[np.ndarray] = None,
-    mc_samples: int = 0,
-    window_sec: float = 3600.0,
-) -> Dict:
+    collision_radius: float = COLLISION_RADIUS,
+) -> Dict[str, Any]:
     """
-    Compute composite risk score for a conjunction event.
+    Compute detailed risk assessment for a conjunction event.
+
+    Uses Chan B-plane collision probability with covariance integration.
 
     Args:
-        primary: primary OrbitalObject
-        secondary: secondary OrbitalObject
-        tca_offset_sec: TCA offset from current epoch (seconds)
-        miss_distance_m: known miss distance (meters), or computed from states
-        rel_pos: relative position at TCA (meters), optional
-        rel_vel: relative velocity at TCA (m/s), optional
-        mc_samples: if > 0, run Monte Carlo with this many samples
-        window_sec: propagation window for MC (seconds)
+        primary_pos/vel: satellite state (ECI, meters, m/s)
+        secondary_pos/vel: debris state (ECI, meters, m/s)
+        covariance_diag: [σx², σy², σz²] position covariance diagonal (m²)
+        miss_distance_m: known miss distance (if pre-computed)
+        collision_radius: combined object radii (m)
 
     Returns:
-        RiskAssessment dict with score, level, probabilities, recommendation
+        Risk assessment dict with PoC, risk level, recommendations
     """
-    # Compute miss distance from states if not provided
-    if miss_distance_m is None:
-        diff = secondary.position - primary.position
-        miss_distance_m = float(np.linalg.norm(diff))
+    p_pos = np.array(primary_pos, dtype=float)
+    p_vel = np.array(primary_vel, dtype=float)
+    s_pos = np.array(secondary_pos, dtype=float)
+    s_vel = np.array(secondary_vel, dtype=float)
 
-    if rel_pos is None:
-        rel_pos = secondary.position - primary.position
-    if rel_vel is None:
-        rel_vel = secondary.velocity - primary.velocity
+    # Relative state
+    rel_pos = s_pos - p_pos
+    rel_vel = s_vel - p_vel
+    dist = float(np.linalg.norm(rel_pos))
+    rel_speed = float(np.linalg.norm(rel_vel))
 
-    # Build relative covariance (assume diagonal 100m position uncertainty)
-    cov_rel = np.eye(3) * (100.0 ** 2) * 2  # combined uncertainty
+    if miss_distance_m is not None:
+        dist = miss_distance_m
 
-    # Chan / Gaussian probability
+    # Build covariance matrix
+    if covariance_diag is not None:
+        cov = np.diag(np.array(covariance_diag, dtype=float))
+    else:
+        # Default covariance based on object type
+        sigma = max(50.0, dist * 0.1)  # 10% of miss distance, min 50m
+        cov = np.diag([sigma**2, sigma**2, sigma**2])
+
+    # Chan collision probability
     try:
-        chan_prob = float(
-            collision_probability(
-                miss_distance=miss_distance_m,
-                cov_rel=cov_rel,
-                rel_pos=rel_pos,
-                rel_vel=rel_vel,
-                collision_radius=COLLISION_RADIUS,
-            )
+        poc = chan_collision_probability(
+            rel_pos=rel_pos,
+            rel_vel=rel_vel,
+            cov_rel=cov,
+            collision_radius=collision_radius,
         )
-    except Exception:
-        chan_prob = 0.0
+    except Exception as e:
+        logger.warning("Chan PoC failed, using Gaussian fallback: %s", e)
+        sigma_eff = np.sqrt(np.trace(cov) / 3.0)
+        poc = float(np.exp(-0.5 * (dist / max(sigma_eff, 1.0)) ** 2))
 
-    # Simple Gaussian fallback
-    sigma = np.sqrt(np.trace(cov_rel) / 3.0)
-    gaussian_prob = float(np.exp(-(miss_distance_m ** 2) / (2.0 * sigma ** 2)))
+    # Gaussian fallback probability
+    sigma_eff = np.sqrt(np.trace(cov) / 3.0)
+    gaussian_prob = float(np.exp(-0.5 * (dist / max(sigma_eff, 1.0)) ** 2))
 
-    # Monte Carlo if requested
-    mc_results = None
-    if mc_samples > 0:
-        sat_entity = entity_from_tle(primary.position, primary.velocity)
-        deb_entity = entity_from_tle(secondary.position, secondary.velocity)
-        engine = Engine2(dt=1.0, enable_drag=True, enable_third_body=True)
-        mc_results = engine.run_monte_carlo(
-            sat_entity, deb_entity, duration=window_sec,
-            N=mc_samples, use_engine1_escalation=False,
-        )
+    # Composite risk score (0-1)
+    # Weighted combination of PoC, miss distance, and relative velocity
+    dist_score = max(0, 1.0 - dist / 10000.0)  # 0 at 10km, 1 at 0
+    vel_score = min(1.0, rel_speed / 15000.0)   # normalized to ~15 km/s max
+    poc_score = min(1.0, poc * 1000.0)           # scale up small probabilities
 
-    # Composite risk score (weighted blend)
-    prob = max(chan_prob, gaussian_prob)
-    if mc_results:
-        mc_prob = mc_results.get("collision_probability", 0.0)
-        prob = max(prob, mc_prob)
+    risk_score = 0.5 * poc_score + 0.3 * dist_score + 0.2 * vel_score
+    risk_score = max(0.0, min(1.0, risk_score))
 
-    # Distance-based scaling
-    if miss_distance_m < 100:
-        dist_factor = 1.0
-    elif miss_distance_m < 1000:
-        dist_factor = 0.8
-    elif miss_distance_m < 5000:
-        dist_factor = 0.5
-    elif miss_distance_m < 20000:
-        dist_factor = 0.2
+    # Risk classification
+    if risk_score > 0.7 or poc > 1e-4 or dist < 500:
+        risk_level = "critical"
+        recommendation = "IMMEDIATE maneuver required"
+    elif risk_score > 0.4 or poc > 1e-5 or dist < 2000:
+        risk_level = "high"
+        recommendation = "Plan avoidance maneuver"
+    elif risk_score > 0.2 or poc > 1e-6 or dist < 5000:
+        risk_level = "medium"
+        recommendation = "Monitor closely, prepare contingency"
     else:
-        dist_factor = 0.05
-
-    risk_score = float(np.clip(prob * 0.7 + dist_factor * 0.3, 0.0, 1.0))
-
-    # Recommendation
-    if risk_score > 0.5 or miss_distance_m < 200:
-        level = "critical"
-        recommendation = "emergency"
-    elif risk_score > 0.1 or miss_distance_m < 1000:
-        level = "high"
-        recommendation = "plan_maneuver"
-    elif risk_score > 0.01 or miss_distance_m < 5000:
-        level = "medium"
-        recommendation = "analyze"
-    else:
-        level = "low"
-        recommendation = "monitor"
-
+        risk_level = "low"
+        recommendation = "Continue monitoring"
 
     return {
-        "risk_score": risk_score,
-        "level": level,
-        "chan_probability": chan_prob,
-        "gaussian_probability": gaussian_prob,
-        "mc_results": mc_results,
-        "miss_distance_m": miss_distance_m,
+        "miss_distance_m": round(dist, 1),
+        "relative_velocity_ms": round(rel_speed, 1),
+        "collision_probability_chan": float(f"{poc:.2e}"),
+        "collision_probability_gaussian": float(f"{gaussian_prob:.2e}"),
+        "risk_score": round(risk_score, 4),
+        "risk_level": risk_level,
         "recommendation": recommendation,
+        "covariance_trace_m2": round(float(np.trace(cov)), 1),
+        "collision_radius_m": collision_radius,
+        "analysis": {
+            "distance_score": round(dist_score, 3),
+            "velocity_score": round(vel_score, 3),
+            "poc_score": round(poc_score, 3),
+        },
     }

@@ -34,3 +34,5 @@ Thumbs.db
 # Outputs
 outputs/
 *.log
+.vercel
+.env*.local

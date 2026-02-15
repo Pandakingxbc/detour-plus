@@ -1,18 +1,18 @@
 """
-check_constraints() — validate maneuver candidates against operational constraints.
-"""
+constraints.py — Validate maneuver candidates against operational constraints.
 
+Checks fuel budget, max delta-v, minimum orbit altitude, blackout windows,
+and secondary conjunction avoidance.
+"""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from engine.config.settings import RE
+from engine.config.settings import RE, GM
 
 # Default constraint parameters
-DEFAULT_MASS_KG = 500.0
-DEFAULT_ISP_S = 220.0
 G0 = 9.80665
 MIN_PERIGEE_ALT_M = 200_000.0  # 200 km minimum altitude
 MAX_DV_PER_BURN_MPS = 50.0     # 50 m/s maximum single-burn delta-v
@@ -22,77 +22,61 @@ def check_constraints(
     delta_v: List[float],
     primary_position: np.ndarray,
     primary_velocity: np.ndarray,
-    mass_kg: float = DEFAULT_MASS_KG,
-    isp_s: float = DEFAULT_ISP_S,
-    remaining_fuel_kg: float = 50.0,
+    mass_kg: float = 465.0,
+    isp_s: float = 220.0,
+    remaining_fuel_kg: float = 45.0,
     max_dv_mps: float = MAX_DV_PER_BURN_MPS,
     min_altitude_m: float = MIN_PERIGEE_ALT_M,
     blackout_windows: Optional[List[Dict]] = None,
     burn_time_sec: float = 0.0,
     secondary_conjunction_count: int = 0,
-) -> Dict:
+) -> Dict[str, Any]:
     """
     Check operational constraints for a proposed maneuver.
 
-    Args:
-        delta_v: [dvx, dvy, dvz] in m/s
-        primary_position: satellite ECI position (meters)
-        primary_velocity: satellite ECI velocity (m/s)
-        mass_kg: spacecraft mass (kg)
-        isp_s: specific impulse (seconds)
-        remaining_fuel_kg: remaining fuel budget (kg)
-        max_dv_mps: maximum delta-v per burn (m/s)
-        min_altitude_m: minimum acceptable perigee altitude (meters)
-        blackout_windows: list of {start_sec, end_sec} blackout windows
-        burn_time_sec: proposed burn time (seconds from epoch)
-        secondary_conjunction_count: number of secondary conjunctions from simulation
-
-    Returns:
-        dict with per-constraint pass/fail and overall result
+    Returns per-constraint pass/fail and overall result.
     """
     dv = np.array(delta_v, dtype=float)
     dv_mag = float(np.linalg.norm(dv))
 
     constraints = {}
 
-    # 1. Fuel budget
-    fuel_required = mass_kg * (1 - np.exp(-dv_mag / (isp_s * G0)))
+    # 1. Fuel budget (Tsiolkovsky)
+    ve = isp_s * G0
+    fuel_required = mass_kg * (1 - np.exp(-dv_mag / ve))
     constraints["fuel_budget"] = {
-        "pass": fuel_required <= remaining_fuel_kg,
-        "fuel_required_kg": float(fuel_required),
-        "fuel_remaining_kg": float(remaining_fuel_kg),
+        "pass": bool(fuel_required <= remaining_fuel_kg),
+        "fuel_required_kg": round(float(fuel_required), 4),
+        "fuel_remaining_kg": round(float(remaining_fuel_kg), 4),
+        "margin_kg": round(float(remaining_fuel_kg - fuel_required), 4),
     }
 
     # 2. Max delta-v per burn
     constraints["max_delta_v"] = {
-        "pass": dv_mag <= max_dv_mps,
-        "delta_v_mps": float(dv_mag),
+        "pass": bool(dv_mag <= max_dv_mps),
+        "delta_v_mps": round(float(dv_mag), 4),
         "limit_mps": float(max_dv_mps),
     }
 
-    # 3. Minimum altitude check (approximate post-maneuver perigee)
-    post_vel = primary_velocity + dv
+    # 3. Minimum altitude check (post-maneuver perigee)
+    post_vel = np.array(primary_velocity, dtype=float) + dv
     r = np.linalg.norm(primary_position)
     v = np.linalg.norm(post_vel)
 
-    # Vis-viva for semi-major axis
-    from engine.config.settings import GM
-    energy = 0.5 * v ** 2 - GM / r
+    energy = 0.5 * v**2 - GM / r
     if energy < 0:
         a = -GM / (2 * energy)
-        # Angular momentum
         h_vec = np.cross(primary_position, post_vel)
         h = np.linalg.norm(h_vec)
-        # Eccentricity
-        e = np.sqrt(max(0, 1 - (h ** 2) / (GM * a)))
+        e = np.sqrt(max(0, 1 - (h**2) / (GM * a)))
         perigee_alt = a * (1 - e) - RE
     else:
-        # Hyperbolic — bad
-        perigee_alt = 0.0
+        perigee_alt = 0.0  # hyperbolic — bad
 
     constraints["min_altitude"] = {
-        "pass": perigee_alt >= min_altitude_m,
-        "perigee_alt_m": float(perigee_alt),
+        "pass": bool(perigee_alt >= min_altitude_m),
+        "perigee_alt_m": round(float(perigee_alt), 1),
+        "perigee_alt_km": round(float(perigee_alt / 1000), 2),
         "limit_m": float(min_altitude_m),
     }
 
@@ -113,14 +97,16 @@ def check_constraints(
 
     # 5. No secondary conjunctions
     constraints["no_secondary_conjunctions"] = {
-        "pass": secondary_conjunction_count == 0,
+        "pass": bool(secondary_conjunction_count == 0),
         "count": secondary_conjunction_count,
     }
 
-    # Overall
     all_pass = all(c["pass"] for c in constraints.values())
 
     return {
         "overall_pass": all_pass,
         "constraints": constraints,
+        "summary": "ALL PASS ✓" if all_pass else "FAILED: " + ", ".join(
+            k for k, v in constraints.items() if not v["pass"]
+        ),
     }

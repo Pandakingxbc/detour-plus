@@ -1,471 +1,355 @@
 """
-LangChain tool wrappers around the Detour physics/simulation tools.
+LangChain @tool wrappers for the Detour agent system.
 
-These wrap the deterministic Python functions in tools/ so the LLM
-*never hallucinates physics* — it calls tools that compute real numbers.
+Wraps raw physics functions from tools/ and state helpers from api/
+into LangChain tools that agents can call via function-calling.
 """
 from __future__ import annotations
 
 import json
-import logging
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+import numpy as np
 from langchain_core.tools import tool
 
-logger = logging.getLogger("detour.agents.tools")
+from api.demo_data import load_demo_data
+from api.state import get_catalog, get_cdm_inbox, get_satellite
+from tools.constraints import check_constraints
+from tools.maneuver import propose_maneuvers, simulate_maneuver
+from tools.propagate import propagate_orbit
+from tools.refine import refine_conjunction
+from tools.risk import assess_conjunction_risk
+from tools.screening import screen_conjunctions
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 1. SCAN / SCREENING
+# CDM / Catalog tools (Agent 0 — Scout)
 # ─────────────────────────────────────────────────────────────────────────
+
 @tool
-def scan_conjunctions(
-    primary_norad_id: Annotated[int, "NORAD ID of the satellite to protect"],
-    lookahead_sec: Annotated[float, "Screening horizon in seconds (default 86400 = 24h)"] = 86400.0,
-    threshold_km: Annotated[float, "Only report conjunctions closer than this (km)"] = 50.0,
-    max_objects: Annotated[int, "Max catalog objects to screen"] = 200,
-) -> str:
-    """Scan the orbital catalog for conjunction threats against a satellite.
-    Returns a list of conjunction events with miss distance, probability,
-    relative velocity, and risk level. Use this first to identify threats."""
-    from api.state import get_catalog
-    from tools.screening import screen_conjunctions
+def get_pending_cdms() -> str:
+    """Get all pending (unprocessed) Conjunction Data Messages from the inbox."""
+    inbox = get_cdm_inbox()
+    pending = inbox.get_pending()
+    return json.dumps(pending, indent=2, default=str)
 
+
+@tool
+def scan_conjunctions(lookahead_hours: float = 24.0, threshold_km: float = 50.0) -> str:
+    """
+    Screen the orbital catalog for close approaches to the active satellite.
+
+    Args:
+        lookahead_hours: how far ahead to scan (hours)
+        threshold_km: only report conjunctions closer than this (km)
+    """
+    sat = get_satellite()
     catalog = get_catalog()
-    primary = catalog.get(primary_norad_id)
-    if primary is None:
-        return json.dumps({"error": f"Satellite {primary_norad_id} not found in catalog"})
+    debris_list = [obj.to_dict() for obj in catalog.list_debris()]
 
-    objects = catalog.list_all()
+    if not debris_list:
+        return json.dumps({"events": [], "message": "No debris in catalog. Use scan_demo_conjunctions or load data first."})
+
     events = screen_conjunctions(
-        primary=primary,
-        catalog_objects=objects,
-        lookahead_sec=lookahead_sec,
+        primary_pos=sat.position,
+        primary_vel=sat.velocity,
+        debris_list=debris_list,
+        lookahead_sec=lookahead_hours * 3600,
         threshold_km=threshold_km,
-        max_objects=max_objects,
     )
-
-    # Summarize for LLM (don't send huge lists)
-    summary = {
-        "primary_id": primary_norad_id,
-        "total_events": len(events),
-        "high_risk_count": sum(1 for e in events if e["risk_level"] in ("critical", "high")),
-        "events": events[:10],  # top 10 by risk
-    }
-    return json.dumps(summary, default=str)
+    return json.dumps({"total_screened": len(debris_list), "events_found": len(events), "events": events}, indent=2)
 
 
 @tool
-def scan_demo_conjunctions(
-    primary_norad_id: Annotated[int, "NORAD ID of the satellite to protect"],
-) -> str:
-    """Scan the pre-computed demo conjunction data for threats against a satellite.
-    Use this when working with the demo dataset (not live catalog).
-    Returns conjunction events from the demo_conjunctions.json file."""
-    import os
+def scan_demo_conjunctions() -> str:
+    """Load demo debris data and scan for conjunctions. Use this for testing/demo."""
+    summary = load_demo_data()
+    sat = get_satellite()
+    catalog = get_catalog()
+    debris_list = [obj.to_dict() for obj in catalog.list_debris()]
 
-    data_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "frontend2", "public", "demo_conjunctions.json",
+    events = screen_conjunctions(
+        primary_pos=sat.position,
+        primary_vel=sat.velocity,
+        debris_list=debris_list,
+        lookahead_sec=86400,
+        threshold_km=50.0,
     )
-    # Also try frontend/public
-    if not os.path.exists(data_path):
-        data_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "frontend", "public", "demo_conjunctions.json",
-        )
-
-    if not os.path.exists(data_path):
-        return json.dumps({"error": "Demo data not found. Run: python -m tools.generate_demo_data"})
-
-    with open(data_path) as f:
-        data = json.load(f)
-
-    events = [e for e in data["conjunction_events"] if e["primary_id"] == primary_norad_id]
-    high_risk = [e for e in events if e["risk_level"] in ("critical", "high")]
-
-    summary = {
-        "primary_id": primary_norad_id,
-        "total_events": len(events),
-        "high_risk_count": len(high_risk),
-        "events": (high_risk[:10] if high_risk else events[:10]),
-    }
-    return json.dumps(summary, default=str)
+    return json.dumps({
+        "demo_loaded": True,
+        "debris_count": len(debris_list),
+        "events_found": len(events),
+        "events": events,
+        "satellite": {"norad_id": sat.norad_id, "name": sat.name},
+    }, indent=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 2. RISK ASSESSMENT
+# Risk assessment tools (Agent 0 — Analyst)
 # ─────────────────────────────────────────────────────────────────────────
+
 @tool
 def assess_risk(
-    primary_norad_id: Annotated[int, "NORAD ID of the primary satellite"],
-    secondary_norad_id: Annotated[int, "NORAD ID of the debris/secondary object"],
-    tca_offset_sec: Annotated[float, "Time to closest approach from now (seconds)"] = 0.0,
-    miss_distance_m: Annotated[Optional[float], "Known miss distance in meters"] = None,
-    mc_samples: Annotated[int, "Monte Carlo samples (0 = skip MC)"] = 0,
+    secondary_id: int,
+    miss_distance_m: Optional[float] = None,
 ) -> str:
-    """Compute detailed risk assessment for a specific conjunction event.
-    Uses Chan probability, Gaussian fallback, and optional Monte Carlo.
-    Returns risk score, probability, level, and recommendation."""
-    from api.state import get_catalog
-    from tools.risk import estimate_risk
+    """
+    Compute detailed collision probability and risk for a conjunction event.
 
+    Args:
+        secondary_id: NORAD ID of the debris object
+        miss_distance_m: known miss distance (optional, computed if not given)
+    """
+    sat = get_satellite()
     catalog = get_catalog()
-    primary = catalog.get(primary_norad_id)
-    secondary = catalog.get(secondary_norad_id)
+    obj = catalog.get(secondary_id)
+    if obj is None:
+        return json.dumps({"error": f"Object {secondary_id} not found in catalog"})
 
-    if primary is None:
-        return json.dumps({"error": f"Primary {primary_norad_id} not found"})
-    if secondary is None:
-        return json.dumps({"error": f"Secondary {secondary_norad_id} not found"})
-
-    result = estimate_risk(
-        primary=primary,
-        secondary=secondary,
-        tca_offset_sec=tca_offset_sec,
+    result = assess_conjunction_risk(
+        primary_pos=sat.position,
+        primary_vel=sat.velocity,
+        secondary_pos=obj.position,
+        secondary_vel=obj.velocity,
         miss_distance_m=miss_distance_m,
-        mc_samples=mc_samples,
     )
-    return json.dumps(result, default=str)
+    result["secondary_id"] = secondary_id
+    result["secondary_name"] = obj.name
+    return json.dumps(result, indent=2, default=str)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# 3. TCA REFINEMENT
-# ─────────────────────────────────────────────────────────────────────────
 @tool
-def refine_conjunction(
-    primary_norad_id: Annotated[int, "NORAD ID of the primary satellite"],
-    secondary_norad_id: Annotated[int, "NORAD ID of the debris/secondary object"],
-    window_sec: Annotated[float, "Propagation window around TCA (seconds)"] = 3600.0,
-) -> str:
-    """Run high-fidelity Engine2 propagation to refine TCA, miss distance,
-    and relative velocity for a conjunction event. Use this after screening
-    to get more accurate numbers before planning maneuvers."""
-    from api.state import get_catalog
-    from tools.refine import refine_tca
+def refine_conjunction_hifi(secondary_id: int, window_sec: float = 3600.0) -> str:
+    """
+    Run Engine2 high-fidelity propagation (RK45 + J2/J3/J4 + drag) for TCA refinement.
 
+    Args:
+        secondary_id: NORAD ID of the debris object
+        window_sec: propagation window in seconds
+    """
+    sat = get_satellite()
     catalog = get_catalog()
-    primary = catalog.get(primary_norad_id)
-    secondary = catalog.get(secondary_norad_id)
+    obj = catalog.get(secondary_id)
+    if obj is None:
+        return json.dumps({"error": f"Object {secondary_id} not found in catalog"})
 
-    if primary is None:
-        return json.dumps({"error": f"Primary {primary_norad_id} not found"})
-    if secondary is None:
-        return json.dumps({"error": f"Secondary {secondary_norad_id} not found"})
-
-    result = refine_tca(primary=primary, secondary=secondary, window_sec=window_sec)
-    return json.dumps(result, default=str)
+    result = refine_conjunction(
+        primary_pos=sat.position,
+        primary_vel=sat.velocity,
+        secondary_pos=obj.position,
+        secondary_vel=obj.velocity,
+        window_sec=window_sec,
+    )
+    result["secondary_id"] = secondary_id
+    return json.dumps(result, indent=2, default=str)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 4. MANEUVER PLANNING
+# Maneuver planning tools (Agent 1 — Planner)
 # ─────────────────────────────────────────────────────────────────────────
+
 @tool
 def propose_avoidance_maneuvers(
-    primary_norad_id: Annotated[int, "NORAD ID of the satellite to maneuver"],
-    secondary_norad_id: Annotated[int, "NORAD ID of the threat object"],
-    tca_offset_sec: Annotated[float, "Time to closest approach (seconds)"],
-    miss_distance_m: Annotated[float, "Current predicted miss distance (meters)"],
-    target_miss_km: Annotated[float, "Desired post-maneuver miss distance (km)"] = 5.0,
+    secondary_id: int,
+    tca_offset_sec: float,
+    miss_distance_m: float,
+    target_miss_km: float = 5.0,
 ) -> str:
-    """Generate 3-5 ranked avoidance maneuver candidates using CW dynamics.
-    Returns maneuver options sorted by fuel cost with delta-v vectors,
-    burn times, fuel requirements, and predicted new miss distance."""
-    from api.state import get_catalog
-    from tools.maneuver import propose_maneuvers
+    """
+    Generate ranked avoidance maneuver candidates for a conjunction event.
 
+    Args:
+        secondary_id: NORAD ID of the debris object
+        tca_offset_sec: time to closest approach (seconds)
+        miss_distance_m: current predicted miss distance (meters)
+        target_miss_km: desired post-maneuver miss distance (km)
+    """
+    sat = get_satellite()
     catalog = get_catalog()
-    primary = catalog.get(primary_norad_id)
-    secondary = catalog.get(secondary_norad_id)
-
-    if primary is None:
-        return json.dumps({"error": f"Primary {primary_norad_id} not found"})
-    if secondary is None:
-        return json.dumps({"error": f"Secondary {secondary_norad_id} not found"})
+    obj = catalog.get(secondary_id)
+    if obj is None:
+        return json.dumps({"error": f"Object {secondary_id} not found in catalog"})
 
     candidates = propose_maneuvers(
-        primary=primary,
-        secondary=secondary,
+        primary_pos=sat.position,
+        primary_vel=sat.velocity,
+        secondary_pos=obj.position,
+        secondary_vel=obj.velocity,
         tca_offset_sec=tca_offset_sec,
         miss_distance_m=miss_distance_m,
         target_miss_km=target_miss_km,
+        mass_kg=sat.total_mass,
     )
-    return json.dumps({"candidates": candidates}, default=str)
+    return json.dumps({"secondary_id": secondary_id, "candidates": candidates}, indent=2)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# 5. MANEUVER SIMULATION
-# ─────────────────────────────────────────────────────────────────────────
 @tool
-def simulate_maneuver(
-    primary_norad_id: Annotated[int, "NORAD ID of the satellite"],
-    secondary_norad_id: Annotated[int, "NORAD ID of the threat"],
-    delta_v: Annotated[List[float], "Delta-v vector [dvx, dvy, dvz] in m/s (ECI)"],
-    burn_time_sec: Annotated[float, "When to apply burn (seconds from now)"],
+def simulate_maneuver_effect(
+    secondary_id: int,
+    delta_v: List[float],
+    burn_time_sec: float,
 ) -> str:
-    """Simulate a specific maneuver using Engine2 high-fidelity propagation.
-    Compares before/after miss distance and checks for secondary conjunctions.
-    Use this to verify a maneuver candidate before recommendation."""
-    from api.state import get_catalog
-    from tools.maneuver import simulate_maneuver as _simulate
+    """
+    Simulate a specific maneuver and compute before/after miss distance.
 
+    Args:
+        secondary_id: NORAD ID of the debris object
+        delta_v: delta-v vector [x, y, z] in m/s (ECI)
+        burn_time_sec: when to apply the burn (seconds from now)
+    """
+    sat = get_satellite()
     catalog = get_catalog()
-    primary = catalog.get(primary_norad_id)
-    secondary = catalog.get(secondary_norad_id)
-
-    if primary is None:
-        return json.dumps({"error": f"Primary {primary_norad_id} not found"})
-    if secondary is None:
-        return json.dumps({"error": f"Secondary {secondary_norad_id} not found"})
-
-    result = _simulate(
-        primary=primary,
-        secondary=secondary,
-        delta_v=delta_v,
-        burn_time_sec=burn_time_sec,
-    )
-    return json.dumps(result, default=str)
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# 6. CONSTRAINT CHECKING
-# ─────────────────────────────────────────────────────────────────────────
-@tool
-def check_maneuver_constraints(
-    delta_v: Annotated[List[float], "Delta-v vector [dvx, dvy, dvz] in m/s"],
-    primary_norad_id: Annotated[int, "NORAD ID of the satellite"],
-    remaining_fuel_kg: Annotated[float, "Remaining fuel budget (kg)"] = 50.0,
-    burn_time_sec: Annotated[float, "Proposed burn time (seconds from now)"] = 0.0,
-    secondary_conjunction_count: Annotated[int, "Number of secondary conjunctions"] = 0,
-) -> str:
-    """Check operational constraints for a proposed maneuver:
-    fuel budget, max delta-v, minimum orbit altitude, blackout windows,
-    and secondary conjunction avoidance. Returns pass/fail for each."""
-    from api.state import get_catalog
-    from tools.constraints import check_constraints
-
-    catalog = get_catalog()
-    primary = catalog.get(primary_norad_id)
-
-    if primary is None:
-        return json.dumps({"error": f"Primary {primary_norad_id} not found"})
-
-    result = check_constraints(
-        delta_v=delta_v,
-        primary_position=primary.position,
-        primary_velocity=primary.velocity,
-        remaining_fuel_kg=remaining_fuel_kg,
-        burn_time_sec=burn_time_sec,
-        secondary_conjunction_count=secondary_conjunction_count,
-    )
-    return json.dumps(result, default=str)
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# 7. ORBIT PROPAGATION
-# ─────────────────────────────────────────────────────────────────────────
-@tool
-def propagate_orbit(
-    norad_id: Annotated[int, "NORAD ID of the object to propagate"],
-    duration_sec: Annotated[float, "Propagation duration (seconds)"] = 5400.0,
-    dt: Annotated[float, "Timestep (seconds)"] = 60.0,
-    fidelity: Annotated[str, "Propagation method: sgp4, rk4, or rk45"] = "sgp4",
-) -> str:
-    """Propagate an orbital object forward in time and return its trajectory.
-    Returns times, positions, and velocities."""
-    from api.state import get_catalog
-    from tools.propagate import propagate_orbits
-
-    catalog = get_catalog()
-    obj = catalog.get(norad_id)
+    obj = catalog.get(secondary_id)
     if obj is None:
-        return json.dumps({"error": f"Object {norad_id} not found"})
+        return json.dumps({"error": f"Object {secondary_id} not found in catalog"})
 
-    results = propagate_orbits(
-        objects=[obj],
-        duration_sec=duration_sec,
-        dt=dt,
-        fidelity=fidelity,
+    result = simulate_maneuver(
+        primary_pos=sat.position,
+        primary_vel=sat.velocity,
+        secondary_pos=obj.position,
+        secondary_vel=obj.velocity,
+        delta_v=delta_v,
+        burn_time_sec=burn_time_sec,
     )
-
-    if norad_id not in results:
-        return json.dumps({"error": f"Propagation failed for {norad_id}"})
-
-    traj = results[norad_id]
-    # Truncate for LLM context (send summary + endpoints)
-    n = len(traj["times"])
-    summary = {
-        "norad_id": norad_id,
-        "total_points": n,
-        "duration_sec": traj["times"][-1] if n > 0 else 0,
-        "start_position": traj["positions"][0] if n > 0 else None,
-        "end_position": traj["positions"][-1] if n > 0 else None,
-        "start_velocity": traj["velocities"][0] if n > 0 else None,
-        "end_velocity": traj["velocities"][-1] if n > 0 else None,
-    }
-    return json.dumps(summary, default=str)
+    return json.dumps(result, indent=2, default=str)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 8. SATELLITE STATUS & RESOURCE MANAGEMENT
+# Constraint checking tools (Agent 2 — Safety)
 # ─────────────────────────────────────────────────────────────────────────
-
-# Singleton satellite instance for the active session
-_active_satellite = None
-
-
-def _get_or_create_satellite():
-    """Get or create the active satellite instance."""
-    global _active_satellite
-    if _active_satellite is None:
-        import numpy as np
-        from engine.models.active_satellite import Satellite
-
-        # ISS-like default (420 km altitude, ~7.66 km/s)
-        EARTH_R = 6_378_137  # m
-        ALT = 420_000  # m
-        r = EARTH_R + ALT
-        _active_satellite = Satellite(
-            position=np.array([r * 0.8, r * 0.5, r * 0.3]),
-            velocity=np.array([-5500.0, 6000.0, 2000.0]),
-            name="DETOUR-SAT-1",
-        )
-    return _active_satellite
-
 
 @tool
 def get_satellite_status() -> str:
-    """
-    Get the operational status of the active satellite.
+    """Get current satellite telemetry: fuel, power, position, delta-v budget."""
+    sat = get_satellite()
+    return json.dumps(sat.get_status(), indent=2, default=str)
 
-    Returns comprehensive telemetry including:
-    - Position, velocity, altitude
-    - Fuel level and percentage
-    - Power/battery status
-    - Available delta-v
-    - Maneuver history count
 
-    Use this BEFORE planning maneuvers to check resource availability.
+@tool
+def check_maneuver_constraints(
+    delta_v: List[float],
+    burn_time_sec: float = 0.0,
+) -> str:
     """
-    sat = _get_or_create_satellite()
-    status = sat.get_status()
-    return json.dumps(status, default=str)
+    Validate a proposed maneuver against operational constraints.
+
+    Args:
+        delta_v: delta-v vector [x, y, z] in m/s
+        burn_time_sec: when the burn occurs (seconds from now)
+    """
+    sat = get_satellite()
+    result = check_constraints(
+        delta_v=delta_v,
+        primary_position=sat.position,
+        primary_velocity=sat.velocity,
+        mass_kg=sat.total_mass,
+        isp_s=sat.config.isp_s,
+        remaining_fuel_kg=sat.fuel_kg,
+        burn_time_sec=burn_time_sec,
+    )
+    return json.dumps(result, indent=2, default=str)
 
 
 @tool
 def check_maneuver_feasibility(
-    delta_v_ms: Annotated[float, "Maneuver delta-v magnitude in m/s"],
-    min_fuel_margin_kg: Annotated[float, "Minimum fuel to keep in reserve (kg)"] = 1.0,
+    delta_v: List[float],
 ) -> str:
     """
-    Check if the satellite can execute a maneuver given current resources.
+    Quick feasibility check: can the satellite execute this maneuver?
 
-    Evaluates:
-    - Fuel sufficiency (including reserve margin)
-    - Power availability for thruster operation
-    - Operational status
-
-    Returns feasibility assessment with resource impact estimates.
+    Args:
+        delta_v: delta-v vector [x, y, z] in m/s
     """
-    sat = _get_or_create_satellite()
-    import numpy as np
+    sat = get_satellite()
+    dv_mag = float(np.linalg.norm(delta_v))
+    ve = sat.config.isp_s * 9.80665
+    fuel_needed = sat.total_mass * (1 - np.exp(-dv_mag / ve))
+    feasible = fuel_needed <= sat.fuel_kg and dv_mag <= 50.0
 
-    feasible = sat.can_perform_maneuver(delta_v_ms, min_fuel_margin_kg)
-
-    # Estimate fuel cost
-    mass_ratio = np.exp(delta_v_ms / (sat.exhaust_velocity * 1000.0))
-    fuel_needed = sat.total_mass * (1 - 1 / mass_ratio)
-
-    result = {
+    return json.dumps({
         "feasible": feasible,
-        "delta_v_requested_ms": delta_v_ms,
-        "fuel_required_kg": round(fuel_needed, 3),
-        "fuel_available_kg": round(sat.fuel, 3),
-        "fuel_after_maneuver_kg": round(sat.fuel - fuel_needed, 3) if feasible else None,
-        "fuel_percentage_after": round(
-            (sat.fuel - fuel_needed) / (sat.total_mass - sat.dry_mass) * 100, 1
-        ) if feasible else None,
-        "power_ok": sat.power >= sat.maneuver_power_draw * (60.0 / 3600.0),
-        "satellite_operational": sat.is_operational,
-        "max_delta_v_available_ms": round(sat.max_delta_v, 2),
-    }
-    return json.dumps(result, default=str)
+        "delta_v_ms": round(dv_mag, 4),
+        "fuel_required_kg": round(float(fuel_needed), 4),
+        "fuel_available_kg": round(sat.fuel_kg, 4),
+        "reason": "OK" if feasible else ("Insufficient fuel" if fuel_needed > sat.fuel_kg else "Exceeds max delta-v"),
+    }, indent=2)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Execution tools (Agent 3 — Ops)
+# ─────────────────────────────────────────────────────────────────────────
+
+@tool
+def execute_maneuver_on_satellite(delta_v: List[float]) -> str:
+    """
+    Execute a maneuver by applying delta-v to the active satellite.
+
+    Args:
+        delta_v: delta-v vector [x, y, z] in m/s (ECI)
+    """
+    sat = get_satellite()
+    dv = np.array(delta_v, dtype=float)
+
+    # Apply maneuver (handles fuel, power, velocity update)
+    result = sat.apply_maneuver(dv)
+    return json.dumps(result, indent=2, default=str)
 
 
 @tool
-def execute_maneuver_on_satellite(
-    delta_v_x: Annotated[float, "Delta-v X component in m/s (ECI)"],
-    delta_v_y: Annotated[float, "Delta-v Y component in m/s (ECI)"],
-    delta_v_z: Annotated[float, "Delta-v Z component in m/s (ECI)"],
-) -> str:
+def propagate_satellite_orbit(duration_hours: float = 1.5) -> str:
     """
-    Execute a maneuver on the active satellite, updating its state.
+    Propagate the satellite orbit forward to verify trajectory.
 
-    This applies the delta-v, consumes fuel and power, and records
-    the maneuver in the satellite's history. Only call this after
-    the Safety agent has approved the maneuver.
-
-    Returns updated satellite status after maneuver execution.
+    Args:
+        duration_hours: how far ahead to propagate (hours)
     """
-    import numpy as np
-
-    sat = _get_or_create_satellite()
-    dv = np.array([delta_v_x, delta_v_y, delta_v_z])
-    dv_mag = np.linalg.norm(dv)
-
-    if not sat.can_perform_maneuver(dv_mag):
-        return json.dumps({
-            "executed": False,
-            "reason": "Insufficient resources for maneuver",
-            "delta_v_requested": dv_mag,
-            "max_delta_v_available": sat.max_delta_v,
-        })
-
-    sat.apply_maneuver(dv)
-    status = sat.get_status()
-    status["executed"] = True
-    status["delta_v_applied_ms"] = round(dv_mag, 4)
-    return json.dumps(status, default=str)
+    sat = get_satellite()
+    result = propagate_orbit(
+        position=sat.position,
+        velocity=sat.velocity,
+        duration_sec=duration_hours * 3600,
+        dt=60.0,
+    )
+    # Return summary, not full trajectory
+    return json.dumps({
+        "duration_hours": duration_hours,
+        "total_points": result["total_points"],
+        "start_altitude_km": result["start_altitude_km"],
+        "end_altitude_km": result["end_altitude_km"],
+        "altitude_range_km": [min(result["altitudes_km"]), max(result["altitudes_km"])],
+    }, indent=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# TOOL REGISTRY
+# Tool groups for each agent
 # ─────────────────────────────────────────────────────────────────────────
 
-# Tools available to the Scout agent
-SCOUT_TOOLS = [scan_conjunctions, scan_demo_conjunctions]
-
-# Tools available to the Analyst agent
-ANALYST_TOOLS = [assess_risk, refine_conjunction, propagate_orbit]
-
-# Tools available to the Planner agent
-PLANNER_TOOLS = [
-    propose_avoidance_maneuvers,
-    simulate_maneuver,
-    get_satellite_status,
-    check_maneuver_feasibility,
+SCOUT_TOOLS = [
+    get_pending_cdms,
+    scan_conjunctions,
+    scan_demo_conjunctions,
 ]
 
-# Tools available to the Safety agent
-SAFETY_TOOLS = [
-    check_maneuver_constraints,
-    simulate_maneuver,
-    get_satellite_status,
-    check_maneuver_feasibility,
-    execute_maneuver_on_satellite,
-]
-
-# All tools (for single-agent mode)
-ALL_TOOLS = [
+ANALYST_TOOLS = [
+    get_pending_cdms,
     scan_conjunctions,
     scan_demo_conjunctions,
     assess_risk,
-    refine_conjunction,
-    propose_avoidance_maneuvers,
-    simulate_maneuver,
-    check_maneuver_constraints,
-    propagate_orbit,
-    get_satellite_status,
-    check_maneuver_feasibility,
-    execute_maneuver_on_satellite,
+    refine_conjunction_hifi,
 ]
+
+PLANNER_TOOLS = [
+    propose_avoidance_maneuvers,
+    simulate_maneuver_effect,
+    assess_risk,
+]
+
+SAFETY_TOOLS = [
+    get_satellite_status,
+    check_maneuver_constraints,
+    check_maneuver_feasibility,
+    propagate_satellite_orbit,
+]
+
+ALL_TOOLS = list({id(t): t for group in [SCOUT_TOOLS, ANALYST_TOOLS, PLANNER_TOOLS, SAFETY_TOOLS,
+                                   [execute_maneuver_on_satellite, propagate_satellite_orbit]] for t in group}.values())

@@ -1,6 +1,7 @@
 "use client"
 
-import { ChevronUp } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { ChevronUp, Play, Square, Loader2 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -10,15 +11,152 @@ interface TerminalDrawerProps {
   className?: string
 }
 
-const MOCK_LOGS = [
-  "[13:14:08] agent.monitor: scanning conjunction feed...",
-  "[13:14:10] tool.screen: 42 events in horizon, highest risk=HIGH",
-  "[13:14:11] planner: evaluating candidate maneuvers",
-  "[13:14:12] planner: selected plan burn-03 (delta-v 0.18 m/s)",
-  "[13:14:13] sim: post-maneuver miss distance +1.27 km",
-]
+interface AgentLog {
+  id: number
+  timestamp: string
+  text: string
+  color: string // tailwind text color class
+}
+
+function formatTime(ts?: number): string {
+  const d = ts ? new Date(ts * 1000) : new Date()
+  return d.toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
+function eventToLog(event: Record<string, unknown>, id: number): AgentLog {
+  const ts = formatTime(event.timestamp as number | undefined)
+  const agent = (event.agent as string) ?? ""
+  const type = event.type as string
+
+  switch (type) {
+    case "agent_start":
+      return { id, timestamp: ts, text: `${agent}: starting analysis...`, color: "text-cyan-400" }
+    case "tool_calls":
+      return {
+        id,
+        timestamp: ts,
+        text: `${agent}: calling tools → ${(event.tools as string[])?.join(", ") ?? ""}`,
+        color: "text-yellow-300",
+      }
+    case "tool_result":
+      return {
+        id,
+        timestamp: ts,
+        text: `${agent}.${event.tool}: ${(event.summary as string)?.slice(0, 120) ?? "done"}`,
+        color: "text-emerald-300",
+      }
+    case "agent_complete":
+      return {
+        id,
+        timestamp: ts,
+        text: `${agent}: completed (${event.elapsed_sec}s)`,
+        color: "text-green-400",
+      }
+    case "agent_output":
+      return {
+        id,
+        timestamp: ts,
+        text: `${agent}: ${(event.content as string)?.slice(0, 150) ?? ""}`,
+        color: "text-blue-300",
+      }
+    case "pipeline_complete":
+      return { id, timestamp: ts, text: "pipeline complete ✓", color: "text-green-500 font-bold" }
+    case "error":
+      return { id, timestamp: ts, text: `ERROR: ${event.message}`, color: "text-red-400" }
+    case "done":
+      return { id, timestamp: ts, text: "stream closed", color: "text-gray-500" }
+    default:
+      return { id, timestamp: ts, text: JSON.stringify(event).slice(0, 120), color: "text-gray-400" }
+  }
+}
 
 export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerProps) {
+  const [logs, setLogs] = useState<AgentLog[]>([
+    { id: 0, timestamp: formatTime(), text: "agent terminal ready — click ▶ to run pipeline", color: "text-gray-500" },
+  ])
+  const [running, setRunning] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const idRef = useRef(1)
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [logs])
+
+  const startPipeline = useCallback(async () => {
+    if (running) return
+    setRunning(true)
+    setLogs([{ id: 0, timestamp: formatTime(), text: "connecting to agent pipeline...", color: "text-cyan-400" }])
+    idRef.current = 1
+
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+
+    try {
+      const res = await fetch("/api/agent/stream?mode=multi", { signal: ctrl.signal })
+
+      if (!res.ok || !res.body) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            id: idRef.current++,
+            timestamp: formatTime(),
+            text: `connection failed (HTTP ${res.status}) — is the agent backend running on :8000?`,
+            color: "text-red-400",
+          },
+        ])
+        setRunning(false)
+        return
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue
+          try {
+            const event = JSON.parse(line.slice(6))
+            const log = eventToLog(event, idRef.current++)
+            setLogs((prev) => [...prev, log])
+          } catch {
+            // ignore malformed lines
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        setLogs((prev) => [
+          ...prev,
+          { id: idRef.current++, timestamp: formatTime(), text: `error: ${e}`, color: "text-red-400" },
+        ])
+      }
+    } finally {
+      setRunning(false)
+      abortRef.current = null
+    }
+  }, [running])
+
+  const stopPipeline = useCallback(() => {
+    abortRef.current?.abort()
+    setLogs((prev) => [
+      ...prev,
+      { id: idRef.current++, timestamp: formatTime(), text: "pipeline aborted by user", color: "text-orange-400" },
+    ])
+    setRunning(false)
+  }, [])
+
   return (
     <div className={cn("pointer-events-auto w-full", className)}>
       <div
@@ -32,15 +170,41 @@ export function TerminalDrawer({ isOpen, onToggle, className }: TerminalDrawerPr
           onClick={onToggle}
           className="flex h-11 w-full items-center justify-between px-4 text-xs font-semibold uppercase tracking-wide text-gray-300 hover:bg-white/5"
         >
-          <span>Agent Terminal</span>
-          <ChevronUp className={cn("h-4 w-4 transition-transform duration-300", isOpen && "rotate-180")} />
+          <span className="flex items-center gap-2">
+            Agent Terminal
+            {running && <Loader2 className="h-3 w-3 animate-spin text-cyan-400" />}
+          </span>
+          <div className="flex items-center gap-2">
+            {!running ? (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); startPipeline() }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); startPipeline() } }}
+                className="flex items-center gap-1 rounded px-2 py-0.5 text-emerald-400 hover:bg-emerald-400/10"
+              >
+                <Play className="h-3 w-3" /> Run
+              </span>
+            ) : (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.stopPropagation(); stopPipeline() }}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); stopPipeline() } }}
+                className="flex items-center gap-1 rounded px-2 py-0.5 text-red-400 hover:bg-red-400/10"
+              >
+                <Square className="h-3 w-3" /> Stop
+              </span>
+            )}
+            <ChevronUp className={cn("h-4 w-4 transition-transform duration-300", isOpen && "rotate-180")} />
+          </div>
         </button>
 
         <div className="h-60 border-t border-border/70 px-4 py-3">
-          <div className="h-full overflow-auto rounded-md bg-black/50 p-3 font-mono text-xs text-emerald-300">
-            {MOCK_LOGS.map((log) => (
-              <div key={log} className="mb-1 last:mb-0">
-                <span className="text-gray-500">$</span> {log}
+          <div ref={scrollRef} className="h-full overflow-auto rounded-md bg-black/50 p-3 font-mono text-xs">
+            {logs.map((log) => (
+              <div key={log.id} className={cn("mb-1 last:mb-0", log.color)}>
+                <span className="text-gray-600">[{log.timestamp}]</span> {log.text}
               </div>
             ))}
           </div>

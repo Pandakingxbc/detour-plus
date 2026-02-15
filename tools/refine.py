@@ -1,66 +1,75 @@
 """
-refine_tca() — high-fidelity TCA refinement using Engine2 (adaptive RK45).
-"""
+refine.py — High-fidelity TCA refinement using Engine2 (RK45).
 
+Runs the full physics engine for accurate miss distance and
+relative velocity at closest approach.
+"""
 from __future__ import annotations
 
-from typing import Dict, Optional
+import logging
+from typing import Any, Dict
 
 import numpy as np
 
-from engine.data.data_sources import OrbitalObject
-from engine.data.tle_to_state import tle_to_state
-from engine.data.tle_entity_factory import entity_from_tle
-from engine.engine.engine2 import Engine2
+from engine.physics.entity import Entity
+from engine.core.engine2 import Engine2
+
+logger = logging.getLogger("detour.tools.refine")
 
 
-def refine_tca(
-    primary: OrbitalObject,
-    secondary: OrbitalObject,
+def refine_conjunction(
+    primary_pos: np.ndarray,
+    primary_vel: np.ndarray,
+    secondary_pos: np.ndarray,
+    secondary_vel: np.ndarray,
     window_sec: float = 3600.0,
-    dt: float = 1.0,
-    adaptive_threshold: float = 5000.0,
-) -> Dict:
+) -> Dict[str, Any]:
     """
-    Run Engine2 high-fidelity propagation to refine TCA between two objects.
+    Run Engine2 high-fidelity propagation for TCA refinement.
 
     Args:
-        primary: primary orbital object
-        secondary: secondary orbital object
-        window_sec: propagation duration (seconds) around expected TCA
-        dt: base timestep for Engine2
-        adaptive_threshold: distance threshold for adaptive refinement (meters)
+        primary_pos/vel: satellite state (ECI)
+        secondary_pos/vel: debris state (ECI)
+        window_sec: propagation window (seconds)
 
     Returns:
-        dict with refined TCA, miss distance, relative velocity, collision/conjunction flags
+        Refined conjunction parameters
     """
-    # Build Entity objects
-    sat_entity = entity_from_tle(primary.position, primary.velocity)
-    deb_entity = entity_from_tle(secondary.position, secondary.velocity)
-
-    # Run Engine2
-    engine = Engine2(
-        dt=dt,
-        adaptive_threshold=adaptive_threshold,
-        enable_drag=True,
-        enable_srp=False,
-        enable_third_body=True,
+    sat = Entity(
+        position=np.array(primary_pos, dtype=float),
+        velocity=np.array(primary_vel, dtype=float),
+    )
+    deb = Entity(
+        position=np.array(secondary_pos, dtype=float),
+        velocity=np.array(secondary_vel, dtype=float),
     )
 
-    result = engine.run(
-        satellite=sat_entity,
-        debris=deb_entity,
-        duration=window_sec,
-        use_engine1_escalation=False,  # skip screening, we want full confirmation
-    )
+    engine = Engine2(dt=1.0, adaptive_threshold=5000.0, enable_drag=True)
 
-    return {
-        "closest_time_sec": result.get("closest_time"),
-        "miss_distance_m": result.get("miss_distance"),
-        "relative_velocity_mps": result.get("relative_velocity"),
-        "collision": result.get("collision", False),
-        "conjunction": result.get("conjunction", False),
-        "energy_drift_sat_pct": result.get("energy_drift_sat_percent"),
-        "energy_drift_deb_pct": result.get("energy_drift_deb_percent"),
-        "note": result.get("note", ""),
-    }
+    try:
+        result = engine.run(
+            satellite=sat,
+            debris=deb,
+            duration=window_sec,
+            use_engine1_escalation=False,
+        )
+
+        return {
+            "refined": True,
+            "closest_time_sec": result.get("closest_time"),
+            "miss_distance_m": round(result.get("miss_distance", float("inf")), 1),
+            "relative_velocity_ms": round(result.get("relative_velocity", 0), 1) if result.get("relative_velocity") else None,
+            "collision": result.get("collision", False),
+            "conjunction": result.get("conjunction", False),
+            "energy_drift_sat_pct": result.get("energy_drift_sat_percent"),
+            "energy_drift_deb_pct": result.get("energy_drift_deb_percent"),
+            "engine": "Engine2 (RK45 + J2/J3/J4 + drag)",
+            "window_sec": window_sec,
+        }
+    except Exception as e:
+        logger.error("Engine2 refinement failed: %s", e)
+        return {
+            "refined": False,
+            "error": str(e),
+            "engine": "Engine2",
+        }

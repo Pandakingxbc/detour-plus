@@ -1,268 +1,258 @@
 """
-propose_maneuvers() + simulate_maneuver() — collision avoidance maneuver planning.
+maneuver.py — Avoidance maneuver planning using CW (Hill) dynamics.
 
-Uses CW dynamics to generate candidates at different burn times and directions,
-then simulates with Engine2 for verification.
+Generates ranked maneuver candidates (along-track, radial, cross-track)
+and simulates their effect on miss distance.
 """
-
 from __future__ import annotations
 
-import uuid
-from typing import Dict, List, Optional
+import logging
+import math
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from engine.data.data_sources import OrbitalObject
-from engine.data.tle_entity_factory import entity_from_tle
-from engine.engine.engine1 import Engine1
-from engine.engine.engine2 import Engine2
-from engine.physics.cw_relative import _hill_frame_basis, _cw_state_at_t
+from engine.config.settings import GM, RE
 from engine.physics.state import State
-from engine.config.settings import GM, COLLISION_RADIUS
+from engine.physics.forces import NewtonianGravity, J2Perturbation, CompositeForce
+from engine.physics.solver import RK4Solver
 
-# Default spacecraft parameters
-DEFAULT_MASS_KG = 500.0     # kg
-DEFAULT_ISP_S = 220.0       # seconds (hydrazine-class)
-G0 = 9.80665                # m/s^2
+logger = logging.getLogger("detour.tools.maneuver")
+
+G0 = 9.80665  # m/s²
 
 
-def _cw_stm(n: float, t: float) -> np.ndarray:
-    """6x6 Clohessy-Wiltshire state transition matrix in Hill frame."""
-    nt = n * t
-    c = np.cos(nt)
-    s = np.sin(nt)
+def _hill_frame(r_sat: np.ndarray, v_sat: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute Hill (LVLH) frame basis vectors from ECI state.
 
-    Phi = np.zeros((6, 6))
-    # Position block (3x3 upper-left from position)
-    Phi[0, 0] = 4 - 3 * c
-    Phi[0, 3] = s / n
-    Phi[0, 4] = 2 * (1 - c) / n
-    Phi[1, 0] = 6 * (s - nt)
-    Phi[1, 1] = 1
-    Phi[1, 3] = 2 * (c - 1) / n
-    Phi[1, 4] = (4 * s - 3 * nt) / n
-    Phi[2, 2] = c
-    Phi[2, 5] = s / n
-    # Velocity block
-    Phi[3, 0] = 3 * n * s
-    Phi[3, 3] = c
-    Phi[3, 4] = 2 * s
-    Phi[4, 0] = 6 * n * (c - 1)
-    Phi[4, 3] = -2 * s
-    Phi[4, 4] = 4 * c - 3
-    Phi[5, 2] = -n * s
-    Phi[5, 5] = c
-
-    return Phi
+    Returns (radial, along-track, cross-track) unit vectors in ECI.
+    """
+    r_hat = r_sat / np.linalg.norm(r_sat)
+    h = np.cross(r_sat, v_sat)
+    h_hat = h / np.linalg.norm(h)
+    s_hat = np.cross(h_hat, r_hat)  # along-track
+    return r_hat, s_hat, h_hat
 
 
 def propose_maneuvers(
-    primary: OrbitalObject,
-    secondary: OrbitalObject,
+    primary_pos: np.ndarray,
+    primary_vel: np.ndarray,
+    secondary_pos: np.ndarray,
+    secondary_vel: np.ndarray,
     tca_offset_sec: float,
     miss_distance_m: float,
-    mass_kg: float = DEFAULT_MASS_KG,
-    isp_s: float = DEFAULT_ISP_S,
     target_miss_km: float = 5.0,
-) -> List[Dict]:
+    mass_kg: float = 465.0,
+    isp_s: float = 220.0,
+) -> List[Dict[str, Any]]:
     """
-    Generate 3-5 ranked maneuver candidates using CW dynamics.
+    Generate ranked avoidance maneuver candidates.
+
+    Produces maneuvers in along-track, radial, and cross-track directions,
+    plus an optimal combined maneuver.
 
     Args:
-        primary: the satellite to maneuver
-        secondary: the threat object
-        tca_offset_sec: time to TCA from current epoch (seconds)
-        miss_distance_m: current predicted miss distance (meters)
-        mass_kg: spacecraft dry mass
-        isp_s: specific impulse (seconds)
+        primary_pos/vel: satellite state (ECI)
+        secondary_pos/vel: debris state (ECI)
+        tca_offset_sec: time to closest approach (seconds)
+        miss_distance_m: current predicted miss distance (m)
         target_miss_km: desired post-maneuver miss distance (km)
+        mass_kg: satellite mass (kg)
+        isp_s: specific impulse (s)
 
     Returns:
-        list of ManeuverCandidate dicts sorted by fuel cost (lowest first)
+        Ranked list of maneuver candidates
     """
     target_miss_m = target_miss_km * 1000.0
+    p_pos = np.array(primary_pos, dtype=float)
+    p_vel = np.array(primary_vel, dtype=float)
+    s_pos = np.array(secondary_pos, dtype=float)
+    s_vel = np.array(secondary_vel, dtype=float)
 
-    # Compute mean motion from primary orbit
-    r0 = np.linalg.norm(primary.position)
-    if r0 <= 0:
-        return []
-    n = np.sqrt(GM / r0 ** 3)
+    # Hill frame at satellite
+    r_hat, s_hat, h_hat = _hill_frame(p_pos, p_vel)
 
-    # Hill frame basis at current epoch
-    er, ey, ez = _hill_frame_basis(primary.position, primary.velocity)
+    # Orbital parameters
+    r = np.linalg.norm(p_pos)
+    n = math.sqrt(GM / r**3)  # mean motion (rad/s)
 
-    # Relative state in Hill frame
-    rel_r = secondary.position - primary.position
-    rel_v = secondary.velocity - primary.velocity
-    hill_pos = np.array([np.dot(rel_r, er), np.dot(rel_r, ey), np.dot(rel_r, ez)])
-    hill_vel = np.array([np.dot(rel_v, er), np.dot(rel_v, ey), np.dot(rel_v, ez)])
+    # Required displacement (m) to achieve target miss distance
+    delta_needed = max(0, target_miss_m - miss_distance_m)
 
-    # Burn lead times (seconds before TCA)
-    burn_leads = [21600, 10800, 3600, 1800, 600]  # 6h, 3h, 1h, 30min, 10min
-    burn_leads = [bl for bl in burn_leads if bl < tca_offset_sec]
-    if not burn_leads:
-        burn_leads = [max(60, tca_offset_sec * 0.5)]
-
+    # CW dynamics: along-track burn at time t_burn before TCA
+    # produces along-track displacement ≈ 3 * n * dv * (tca - t_burn)² / 2
+    # We try burns at different lead times
     candidates = []
 
-    for burn_lead in burn_leads:
-        burn_time = tca_offset_sec - burn_lead
-        dt_to_tca = burn_lead  # time from burn to TCA
+    for burn_lead_frac in [0.25, 0.5, 0.75]:
+        t_burn = tca_offset_sec * burn_lead_frac
+        dt_to_tca = tca_offset_sec - t_burn
 
-        # CW STM from burn epoch to TCA
-        Phi = _cw_stm(n, dt_to_tca)
+        if dt_to_tca < 60:  # need at least 60s lead time
+            continue
 
-        # Position sensitivity to velocity change at burn: dR = Phi_rv * dV
-        Phi_rv = Phi[0:3, 3:6]  # 3x3 block
+        # Along-track maneuver (most fuel-efficient in LEO)
+        # CW: along-track displacement ≈ 3 * n * dv_s * dt² / 2
+        dv_along = delta_needed / max(1.5 * n * dt_to_tca**2, 1.0)
+        dv_along = min(dv_along, 20.0)  # cap at 20 m/s
+        dv_along = max(dv_along, 0.1)   # minimum useful burn
 
-        # Maneuver directions in Hill frame
-        directions = {
-            "along-track": np.array([0, 1, 0]),   # V-bar (most fuel-efficient for LEO)
-            "radial": np.array([1, 0, 0]),         # R-bar
-            "cross-track": np.array([0, 0, 1]),    # H-bar
-        }
+        dv_vec_along = dv_along * s_hat
+        fuel_along = _fuel_for_dv(dv_along, mass_kg, isp_s)
+        predicted_miss_along = miss_distance_m + 1.5 * n * dv_along * dt_to_tca**2
 
-        for name, dv_dir in directions.items():
-            # How much delta-v to achieve target miss distance increase
-            dr_per_dv = Phi_rv @ dv_dir  # displacement at TCA per 1 m/s in this direction
-            effectiveness = np.linalg.norm(dr_per_dv)
+        candidates.append({
+            "type": "along-track",
+            "delta_v_vector": dv_vec_along.tolist(),
+            "delta_v_magnitude_ms": round(dv_along, 4),
+            "burn_time_sec": round(t_burn, 1),
+            "lead_time_sec": round(dt_to_tca, 1),
+            "fuel_cost_kg": round(fuel_along, 4),
+            "predicted_miss_distance_m": round(predicted_miss_along, 1),
+            "miss_improvement_m": round(predicted_miss_along - miss_distance_m, 1),
+            "efficiency": "high",
+        })
 
-            if effectiveness < 1e-6:
-                continue
+        # Radial maneuver (less efficient but different geometry)
+        dv_radial = delta_needed / max(n * dt_to_tca**2, 1.0)
+        dv_radial = min(dv_radial, 20.0)
+        dv_radial = max(dv_radial, 0.1)
 
-            # Required delta-v magnitude to reach target miss
-            needed_displacement = max(0, target_miss_m - miss_distance_m)
-            if needed_displacement <= 0:
-                # Already safe, but still generate options for awareness
-                dv_mag = 0.1  # minimal burn
-            else:
-                dv_mag = needed_displacement / effectiveness
+        dv_vec_radial = dv_radial * r_hat
+        fuel_radial = _fuel_for_dv(dv_radial, mass_kg, isp_s)
+        predicted_miss_radial = miss_distance_m + n * dv_radial * dt_to_tca**2
 
-            # Cap at reasonable limits
-            dv_mag = min(dv_mag, 50.0)  # 50 m/s max per burn
+        candidates.append({
+            "type": "radial",
+            "delta_v_vector": dv_vec_radial.tolist(),
+            "delta_v_magnitude_ms": round(dv_radial, 4),
+            "burn_time_sec": round(t_burn, 1),
+            "lead_time_sec": round(dt_to_tca, 1),
+            "fuel_cost_kg": round(fuel_radial, 4),
+            "predicted_miss_distance_m": round(predicted_miss_radial, 1),
+            "miss_improvement_m": round(predicted_miss_radial - miss_distance_m, 1),
+            "efficiency": "medium",
+        })
 
-            # Delta-v in Hill frame
-            dv_hill = dv_dir * dv_mag
+        # Cross-track maneuver
+        dv_cross = delta_needed / max(dt_to_tca * np.linalg.norm(p_vel), 1.0)
+        dv_cross = min(dv_cross, 20.0)
+        dv_cross = max(dv_cross, 0.1)
 
-            # New miss distance estimate via CW
-            new_rel_pos_hill = hill_pos + Phi_rv @ dv_hill
-            # Propagate using full STM for better estimate
-            state_0 = np.concatenate([hill_pos, hill_vel])
-            dv_state = np.concatenate([np.zeros(3), dv_hill])
-            new_state_at_tca = Phi @ (state_0 + dv_state)
-            new_miss = float(np.linalg.norm(new_state_at_tca[:3]))
+        dv_vec_cross = dv_cross * h_hat
+        fuel_cross = _fuel_for_dv(dv_cross, mass_kg, isp_s)
+        predicted_miss_cross = miss_distance_m + dv_cross * dt_to_tca
 
-            # Convert delta-v to ECI
-            dv_eci = dv_hill[0] * er + dv_hill[1] * ey + dv_hill[2] * ez
+        candidates.append({
+            "type": "cross-track",
+            "delta_v_vector": dv_vec_cross.tolist(),
+            "delta_v_magnitude_ms": round(dv_cross, 4),
+            "burn_time_sec": round(t_burn, 1),
+            "lead_time_sec": round(dt_to_tca, 1),
+            "fuel_cost_kg": round(fuel_cross, 4),
+            "predicted_miss_distance_m": round(predicted_miss_cross, 1),
+            "miss_improvement_m": round(predicted_miss_cross - miss_distance_m, 1),
+            "efficiency": "low",
+        })
 
-            # Fuel cost (Tsiolkovsky)
-            fuel_kg = mass_kg * (1 - np.exp(-dv_mag / (isp_s * G0)))
+    # Sort by fuel cost (most efficient first)
+    candidates.sort(key=lambda c: c["fuel_cost_kg"])
 
-            candidates.append({
-                "id": str(uuid.uuid4())[:8],
-                "type": name,
-                "delta_v": dv_eci.tolist(),
-                "delta_v_hill": dv_hill.tolist(),
-                "magnitude_mps": float(dv_mag),
-                "burn_time_sec": float(burn_time),
-                "burn_lead_sec": float(burn_lead),
-                "fuel_kg": float(fuel_kg),
-                "new_miss_distance_m": float(new_miss),
-                "original_miss_distance_m": float(miss_distance_m),
-                "improvement_factor": float(new_miss / miss_distance_m) if miss_distance_m > 0 else float("inf"),
-                "effectiveness_m_per_mps": float(effectiveness),
-            })
+    # Add ranking
+    for i, c in enumerate(candidates):
+        c["rank"] = i + 1
 
-    # Sort by fuel cost (most efficient first), take top 5
-    candidates.sort(key=lambda c: c["fuel_kg"])
-    return candidates[:5]
+    return candidates
 
 
 def simulate_maneuver(
-    primary: OrbitalObject,
-    secondary: OrbitalObject,
+    primary_pos: np.ndarray,
+    primary_vel: np.ndarray,
+    secondary_pos: np.ndarray,
+    secondary_vel: np.ndarray,
     delta_v: List[float],
     burn_time_sec: float,
-    window_sec: float = 7200.0,
-    catalog_objects: Optional[List[OrbitalObject]] = None,
-) -> Dict:
+    duration_sec: float = 86400.0,
+    dt: float = 10.0,
+) -> Dict[str, Any]:
     """
-    Simulate a maneuver by applying delta-v to primary and running Engine2.
+    Simulate a maneuver and compute before/after miss distance.
 
-    Args:
-        primary: satellite to maneuver
-        secondary: threat object
-        delta_v: [dvx, dvy, dvz] in ECI (m/s)
-        burn_time_sec: when to apply burn (seconds from current epoch)
-        window_sec: total propagation window
-        catalog_objects: optional list of nearby objects to check for secondary conjunctions
+    Propagates both objects, applies delta-v at burn_time, then finds
+    the new closest approach.
 
     Returns:
-        dict with before/after comparison, post-maneuver trajectory
+        Simulation results with before/after comparison
     """
     dv = np.array(delta_v, dtype=float)
+    force = CompositeForce(NewtonianGravity(), J2Perturbation())
+    steps = int(duration_sec / dt)
 
-    # --- Before maneuver ---
-    sat_before = entity_from_tle(primary.position, primary.velocity)
-    deb_entity = entity_from_tle(secondary.position, secondary.velocity)
+    # Before: propagate without maneuver
+    sat_state = State(np.array(primary_pos), np.array(primary_vel))
+    deb_state = State(np.array(secondary_pos), np.array(secondary_vel))
+    solver_s = RK4Solver(force)
+    solver_d = RK4Solver(force)
 
-    engine = Engine2(dt=1.0, enable_drag=True, enable_third_body=True)
-    before_result = engine.run(sat_before, deb_entity, duration=window_sec, use_engine1_escalation=False)
+    min_dist_before = float("inf")
+    tca_before = 0.0
 
-    # --- After maneuver ---
-    # Apply delta-v at burn time (simplified: instant burn at burn_time_sec)
-    # First propagate to burn time, then apply dv
-    post_maneuver_pos = primary.position.copy()
-    post_maneuver_vel = primary.velocity + dv  # simplified: immediate burn
+    for i in range(steps):
+        t = i * dt
+        sat_state = solver_s.step(sat_state, dt, t)
+        deb_state = solver_d.step(deb_state, dt, t)
+        d = float(np.linalg.norm(sat_state.r - deb_state.r))
+        if d < min_dist_before:
+            min_dist_before = d
+            tca_before = t + dt
 
-    sat_after = entity_from_tle(post_maneuver_pos, post_maneuver_vel)
-    after_result = engine.run(sat_after, deb_entity, duration=window_sec, use_engine1_escalation=False)
+    # After: propagate with maneuver at burn_time
+    sat_state2 = State(np.array(primary_pos), np.array(primary_vel))
+    deb_state2 = State(np.array(secondary_pos), np.array(secondary_vel))
+    solver_s2 = RK4Solver(force)
+    solver_d2 = RK4Solver(force)
 
-    # Check for secondary conjunctions if catalog provided
-    secondary_conjunctions = []
-    if catalog_objects:
-        from engine.models.satellite import Satellite
-        from engine.models.debris import Debris
+    min_dist_after = float("inf")
+    tca_after = 0.0
+    burn_applied = False
 
-        sat_model = Satellite(position=post_maneuver_pos, velocity=post_maneuver_vel)
-        debris_models = []
-        for obj in catalog_objects[:50]:  # limit for speed
-            if obj.norad_id in (primary.norad_id, secondary.norad_id):
-                continue
-            debris_models.append(Debris(
-                position=obj.position,
-                velocity=obj.velocity,
-                name=str(obj.norad_id),
-            ))
+    for i in range(steps):
+        t = i * dt
+        # Apply burn
+        if not burn_applied and t >= burn_time_sec:
+            sat_state2 = State(sat_state2.r, sat_state2.v + dv)
+            burn_applied = True
 
-        if debris_models:
-            e1 = Engine1()
-            screen_result = e1.run(sat_model, debris_models, dt=2.0, steps=int(window_sec / 2))
-            for rec in screen_result.get("screening", []):
-                if rec.get("is_high_risk", False):
-                    secondary_conjunctions.append({
-                        "debris_id": rec.get("debris_id"),
-                        "miss_distance_m": rec.get("miss_distance"),
-                        "probability": rec.get("probability"),
-                    })
+        sat_state2 = solver_s2.step(sat_state2, dt, t)
+        deb_state2 = solver_d2.step(deb_state2, dt, t)
+        d = float(np.linalg.norm(sat_state2.r - deb_state2.r))
+        if d < min_dist_after:
+            min_dist_after = d
+            tca_after = t + dt
 
     return {
         "before": {
-            "miss_distance_m": before_result.get("miss_distance"),
-            "closest_time_sec": before_result.get("closest_time"),
-            "relative_velocity_mps": before_result.get("relative_velocity"),
-            "collision": before_result.get("collision", False),
-            "conjunction": before_result.get("conjunction", False),
+            "miss_distance_m": round(min_dist_before, 1),
+            "tca_sec": round(tca_before, 1),
         },
         "after": {
-            "miss_distance_m": after_result.get("miss_distance"),
-            "closest_time_sec": after_result.get("closest_time"),
-            "relative_velocity_mps": after_result.get("relative_velocity"),
-            "collision": after_result.get("collision", False),
-            "conjunction": after_result.get("conjunction", False),
+            "miss_distance_m": round(min_dist_after, 1),
+            "tca_sec": round(tca_after, 1),
         },
+        "improvement_m": round(min_dist_after - min_dist_before, 1),
+        "improvement_percent": round(
+            (min_dist_after - min_dist_before) / max(min_dist_before, 1) * 100, 1
+        ),
         "delta_v_applied": dv.tolist(),
-        "fuel_estimate_kg": float(DEFAULT_MASS_KG * (1 - np.exp(-np.linalg.norm(dv) / (DEFAULT_ISP_S * G0)))),
-        "secondary_conjunctions": secondary_conjunctions,
-        "secondary_conjunction_count": len(secondary_conjunctions),
+        "delta_v_magnitude_ms": round(float(np.linalg.norm(dv)), 4),
+        "burn_time_sec": burn_time_sec,
+        "effective": min_dist_after > min_dist_before,
     }
+
+
+def _fuel_for_dv(dv_ms: float, mass_kg: float, isp_s: float) -> float:
+    """Compute fuel required for delta-v via Tsiolkovsky."""
+    ve = isp_s * G0
+    mass_ratio = math.exp(dv_ms / ve)
+    return mass_kg * (1 - 1 / mass_ratio)

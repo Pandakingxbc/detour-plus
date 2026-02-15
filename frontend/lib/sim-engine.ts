@@ -50,6 +50,7 @@ const ORBIT_INCLINATION_DEG = 51.6 // ISS-like inclination
 const ORBIT_INCLINATION_PERIOD_TICKS = 1500 // smooth sinusoidal path
 
 // Cardinal direction deltas (lat, lon) in degrees
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const DIRECTION_DELTAS: Record<CardinalDirection, [number, number]> = {
   N: [1, 0],
   S: [-1, 0],
