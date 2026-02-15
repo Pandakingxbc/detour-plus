@@ -53,65 +53,6 @@ else
         || echo "  ⚠ Could not clear cache (not root)."
 fi
 
-# ── Ensure CUDA libraries are on LD_LIBRARY_PATH ─────────────────────────
-# vLLM needs libcudart.so.12, libnvrtc.so etc. which are native C libs.
-# We search dynamically since the path varies across distros / CUDA versions.
-echo ""
-echo "[*] Locating CUDA libraries..."
-CUDA_FOUND=false
-
-# Method 1: ldconfig cache (fastest)
-if command -v ldconfig &>/dev/null; then
-    CUDART_PATH=$(ldconfig -p 2>/dev/null | grep libcudart.so.12 | head -1 | awk '{print $NF}')
-    if [[ -n "${CUDART_PATH:-}" ]]; then
-        CUDA_LIB_DIR=$(dirname "${CUDART_PATH}")
-        export LD_LIBRARY_PATH="${CUDA_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-        echo "  Found via ldconfig: ${CUDA_LIB_DIR}"
-        CUDA_FOUND=true
-    fi
-fi
-
-# Method 2: search common paths
-if ! $CUDA_FOUND; then
-    for p in /usr/local/cuda/lib64 /usr/local/cuda-12/lib64 \
-             /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu \
-             /usr/local/cuda/targets/sbsa-linux/lib \
-             /usr/local/cuda/targets/aarch64-linux/lib; do
-        if [[ -d "$p" ]] && ls "$p"/libcudart.so.12* &>/dev/null 2>&1; then
-            export LD_LIBRARY_PATH="${p}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            echo "  Found in: ${p}"
-            CUDA_FOUND=true
-            break
-        fi
-    done
-fi
-
-# Method 3: brute-force find
-if ! $CUDA_FOUND; then
-    echo "  Searching filesystem for libcudart.so.12 (may take a moment)..."
-    CUDART_PATH=$(find /usr -name 'libcudart.so.12*' -type f 2>/dev/null | head -1)
-    if [[ -n "${CUDART_PATH:-}" ]]; then
-        CUDA_LIB_DIR=$(dirname "${CUDART_PATH}")
-        export LD_LIBRARY_PATH="${CUDA_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-        echo "  Found via find: ${CUDA_LIB_DIR}"
-        CUDA_FOUND=true
-    fi
-fi
-
-# Also add nvidia stubs/lib dirs if they exist
-for p in /usr/local/cuda/lib64/stubs /usr/lib/aarch64-linux-gnu/nvidia; do
-    [[ -d "$p" ]] && export LD_LIBRARY_PATH="${p}:${LD_LIBRARY_PATH}"
-done
-
-if ! $CUDA_FOUND; then
-    echo "  ⚠ Could not find libcudart.so.12 anywhere!"
-    echo "  Try: sudo apt install nvidia-cuda-toolkit"
-    echo "  Or:  export LD_LIBRARY_PATH=/path/to/cuda/lib64"
-    exit 1
-fi
-
-echo "  LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
-
 # ── Step 3: Set up venv + install vLLM ───────────────────────────────────
 echo ""
 echo "[3/4] Preparing vLLM..."
@@ -139,13 +80,90 @@ else
     echo "  vLLM ${VLLM_VER} already installed ✓"
 fi
 
+# ── Ensure CUDA libraries are on LD_LIBRARY_PATH ─────────────────────────
+# libcudart.so.12 may not be installed system-wide (GX10 ships without it).
+# pip install vllm pulls nvidia-cuda-runtime-cu12 which has it inside site-packages.
+echo ""
+echo "[*] Locating CUDA libraries..."
+CUDA_FOUND=false
+
+# Method 1: check inside pip packages (nvidia-cuda-runtime-cu12)
+SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "")
+for candidate in \
+    "${SITE_PKGS}/nvidia/cuda_runtime/lib" \
+    "${VENV_DIR}/lib/python3.12/site-packages/nvidia/cuda_runtime/lib" \
+    "${VENV_DIR}/lib/python3.*/site-packages/nvidia/cuda_runtime/lib"; do
+    # Use ls to expand globs
+    for p in $candidate; do
+        if [[ -d "$p" ]] && ls "$p"/libcudart.so.12* &>/dev/null 2>&1; then
+            export LD_LIBRARY_PATH="${p}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            echo "  Found in pip package: ${p}"
+            CUDA_FOUND=true
+            break 2
+        fi
+    done
+done
+
+# Method 1b: also add all nvidia lib dirs from pip packages
+if [[ -n "${SITE_PKGS:-}" ]] && [[ -d "${SITE_PKGS}/nvidia" ]]; then
+    for nvlib in "${SITE_PKGS}"/nvidia/*/lib; do
+        [[ -d "$nvlib" ]] && export LD_LIBRARY_PATH="${nvlib}:${LD_LIBRARY_PATH}"
+    done
+    echo "  Added all nvidia pip lib dirs to LD_LIBRARY_PATH"
+fi
+
+# Method 2: ldconfig cache
+if ! $CUDA_FOUND && command -v ldconfig &>/dev/null; then
+    CUDART_PATH=$(ldconfig -p 2>/dev/null | grep libcudart.so.12 | head -1 | awk '{print $NF}')
+    if [[ -n "${CUDART_PATH:-}" ]]; then
+        CUDA_LIB_DIR=$(dirname "${CUDART_PATH}")
+        export LD_LIBRARY_PATH="${CUDA_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        echo "  Found via ldconfig: ${CUDA_LIB_DIR}"
+        CUDA_FOUND=true
+    fi
+fi
+
+# Method 3: search common system paths
+if ! $CUDA_FOUND; then
+    for p in /usr/local/cuda/lib64 /usr/local/cuda-12/lib64 \
+             /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu \
+             /usr/local/cuda/targets/sbsa-linux/lib \
+             /usr/local/cuda/targets/aarch64-linux/lib; do
+        if [[ -d "$p" ]] && ls "$p"/libcudart.so.12* &>/dev/null 2>&1; then
+            export LD_LIBRARY_PATH="${p}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            echo "  Found in: ${p}"
+            CUDA_FOUND=true
+            break
+        fi
+    done
+fi
+
+# Method 4: brute-force find everywhere
+if ! $CUDA_FOUND; then
+    echo "  Searching entire filesystem for libcudart.so.12..."
+    CUDART_PATH=$(find / -name 'libcudart.so.12*' -type f 2>/dev/null | head -1)
+    if [[ -n "${CUDART_PATH:-}" ]]; then
+        CUDA_LIB_DIR=$(dirname "${CUDART_PATH}")
+        export LD_LIBRARY_PATH="${CUDA_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        echo "  Found via find: ${CUDA_LIB_DIR}"
+        CUDA_FOUND=true
+    fi
+fi
+
+if ! $CUDA_FOUND; then
+    echo "  ⚠ Could not find libcudart.so.12 anywhere!"
+    echo "  Try: pip install nvidia-cuda-runtime-cu12"
+    exit 1
+fi
+
+echo "  LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
+
 # ── Sanity check: can vllm actually import? ──────────────────────────────
 echo ""
 echo "  Verifying vLLM can load..."
 if ! python3 -c "import vllm; print(f'  vLLM {vllm.__version__} OK ✓')" 2>&1; then
     echo "  ✗ vLLM failed to import. Check LD_LIBRARY_PATH and CUDA installation."
     echo "  LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-<unset>}"
-    echo "  Run: find /usr -name 'libcudart.so.12*' 2>/dev/null"
     exit 1
 fi
 
