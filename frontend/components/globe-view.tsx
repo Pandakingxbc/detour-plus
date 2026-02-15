@@ -198,21 +198,24 @@ function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
   )
 }
 
-function OrbitTrack({ points }: { points: THREE.Vector3[] }) {
+function OrbitTrack({ points, isManual }: { points: THREE.Vector3[]; isManual?: boolean }) {
   if (points.length < 2) return null
 
   const linePoints = points.map((point) => [point.x, point.y, point.z] as [number, number, number])
+  const color = isManual ? "#10b981" : "#7dd3fc"
 
-  return <Line points={linePoints} color="#7dd3fc" transparent opacity={0.95} lineWidth={1.4} />
+  return <Line points={linePoints} color={color} transparent opacity={0.95} lineWidth={1.4} />
 }
 
-function TargetMarker({ point }: { point: THREE.Vector3 | null }) {
+function TargetMarker({ point, isManual }: { point: THREE.Vector3 | null; isManual?: boolean }) {
   if (!point) return null
+
+  const color = isManual ? "#10b981" : "#22d3ee"
 
   return (
     <mesh position={point}>
       <sphereGeometry args={[0.012, 14, 14]} />
-      <meshBasicMaterial color="#22d3ee" />
+      <meshBasicMaterial color={color} />
     </mesh>
   )
 }
@@ -221,10 +224,12 @@ function Scene({
   debrisPositions,
   orbitPoints,
   currentTargetPoint,
+  isManualSatellite,
 }: {
   debrisPositions: THREE.Vector3[]
   orbitPoints: THREE.Vector3[]
   currentTargetPoint: THREE.Vector3 | null
+  isManualSatellite: boolean
 }) {
   const { camera } = useThree()
 
@@ -240,20 +245,28 @@ function Scene({
       <Earth />
       <Graticule />
       <Atmosphere />
-      <OrbitTrack points={orbitPoints} />
-      <TargetMarker point={currentTargetPoint} />
+      <OrbitTrack points={orbitPoints} isManual={isManualSatellite} />
+      <TargetMarker point={currentTargetPoint} isManual={isManualSatellite} />
       {debrisPositions.length > 0 ? <StaticObjects positions={debrisPositions} /> : null}
       <OrbitControls enablePan enableZoom minDistance={1.5} maxDistance={20} enableDamping dampingFactor={0.05} />
     </>
   )
 }
 
+interface ManualSatelliteData {
+  norad_id: number
+  times: number[]
+  positions: number[][]
+  velocities: number[][]
+}
+
 interface GlobeViewProps {
   compacted?: boolean
   noradId?: number | null
+  manualSatelliteData?: ManualSatelliteData | null
 }
 
-export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
+export function GlobeView({ compacted = false, noradId, manualSatelliteData }: GlobeViewProps) {
   const [debrisPositions, setDebrisPositions] = useState<THREE.Vector3[]>([])
   const [orbitTrack, setOrbitTrack] = useState<OrbitTrackState>({
     points: [],
@@ -323,6 +336,42 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
       return
     }
 
+    // Handle manual satellite
+    if (noradId === -1 && manualSatelliteData) {
+      const convertPositionToGeodetic = (pos: number[]) => {
+        const x = pos[0]
+        const y = pos[1]
+        const z = pos[2]
+        const r = Math.sqrt(x * x + y * y + z * z)
+        const lat = (Math.asin(z / r) * 180) / Math.PI
+        const lon = (Math.atan2(y, x) * 180) / Math.PI
+        const altKm = (r - 6371000) / 1000
+        return { lat, lon, altKm }
+      }
+
+      try {
+        const points = manualSatelliteData.positions
+          .map((pos: number[]) => {
+            const geodetic = convertPositionToGeodetic(pos)
+            return toVectorFromGeodetic(geodetic.lat, geodetic.lon, geodetic.altKm)
+          })
+          .filter((value: THREE.Vector3 | null): value is THREE.Vector3 => value !== null)
+
+        // Calculate proper timestep from trajectory data
+        const times = manualSatelliteData.times
+        const avgStep = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) : 30
+
+        setOrbitTrack({
+          points,
+          timeStartMs: Date.now(),
+          stepSec: avgStep,
+        })
+      } catch (error) {
+        console.error("Failed to process manual satellite:", error)
+      }
+      return
+    }
+
     const controller = new AbortController()
     let cancelled = false
     let inFlight = false
@@ -371,7 +420,7 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
       controller.abort()
       window.clearInterval(interval)
     }
-  }, [noradId])
+  }, [noradId, manualSatelliteData])
 
   const currentTargetPoint = useMemo(() => {
     if (orbitTrack.points.length === 0) return null
@@ -380,10 +429,10 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
     if (!Number.isFinite(stepMs) || stepMs <= 0) return orbitTrack.points[0]
 
     const elapsedMs = Math.max(0, currentTimeMs - orbitTrack.timeStartMs)
-    const index = Math.min(
-      orbitTrack.points.length - 1,
-      Math.floor(elapsedMs / stepMs)
-    )
+    // Loop continuously by using modulo
+    const totalDurationMs = orbitTrack.points.length * stepMs
+    const loopedElapsedMs = totalDurationMs > 0 ? elapsedMs % totalDurationMs : 0
+    const index = Math.floor(loopedElapsedMs / stepMs) % orbitTrack.points.length
 
     return orbitTrack.points[index] ?? orbitTrack.points[0]
   }, [currentTimeMs, orbitTrack])
@@ -405,6 +454,7 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
           debrisPositions={debrisPositions}
           orbitPoints={orbitTrack.points}
           currentTargetPoint={currentTargetPoint}
+          isManualSatellite={noradId === -1}
         />
       </Canvas>
     </div>
