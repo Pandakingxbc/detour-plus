@@ -5,13 +5,19 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { OrbitControls, Stars } from "@react-three/drei"
 import * as THREE from "three"
 
+import { geodeticToUnitVector } from "@/lib/geo"
 import { cn } from "@/lib/utils"
 
 const EARTH_RADIUS_M = 6_378_137
 const SCALE = 1 / EARTH_RADIUS_M
+const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
 
 interface ApiOrbitalObject {
-  position: [number, number, number]
+  position?: [number, number, number]
+  lat?: number
+  lon?: number
+  alt_km?: number
+  epoch?: string
 }
 
 interface MockOrbit {
@@ -24,66 +30,65 @@ interface MockOrbit {
 }
 
 function Earth() {
-  const meshRef = useRef<THREE.Mesh>(null)
+  const { gl } = useThree()
+  const [surfaceMap, setSurfaceMap] = useState<THREE.Texture | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const loader = new THREE.TextureLoader()
+
+    loader.load(
+      TEXTURE_PATH,
+      (texture) => {
+        if (!active) {
+          texture.dispose()
+          return
+        }
+
+        texture.colorSpace = THREE.SRGBColorSpace
+        texture.anisotropy = Math.min(8, gl.capabilities.getMaxAnisotropy())
+        texture.minFilter = THREE.LinearMipmapLinearFilter
+        texture.magFilter = THREE.LinearFilter
+        texture.needsUpdate = true
+
+        setSurfaceMap((previous) => {
+          previous?.dispose()
+          return texture
+        })
+      },
+      undefined,
+      () => {
+        // If the local texture is not present yet, keep the fallback material.
+      }
+    )
+
+    return () => {
+      active = false
+    }
+  }, [gl])
+
+  useEffect(() => {
+    return () => {
+      surfaceMap?.dispose()
+    }
+  }, [surfaceMap])
 
   const material = useMemo(() => {
-    const canvas = document.createElement("canvas")
-    canvas.width = 1024
-    canvas.height = 512
-    const ctx = canvas.getContext("2d")
-    if (!ctx) {
-      return new THREE.MeshPhongMaterial({ color: "#2a4f72" })
-    }
-
-    ctx.fillStyle = "#173b5f"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-    ctx.fillStyle = "#375f38"
-    ctx.beginPath()
-    ctx.ellipse(250, 160, 80, 60, -0.3, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.beginPath()
-    ctx.ellipse(310, 310, 42, 72, 0.2, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.beginPath()
-    ctx.ellipse(520, 200, 52, 82, 0, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.beginPath()
-    ctx.ellipse(680, 160, 100, 62, 0, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.beginPath()
-    ctx.ellipse(780, 340, 36, 26, 0, 0, Math.PI * 2)
-    ctx.fill()
-
-    ctx.strokeStyle = "rgba(150, 190, 220, 0.14)"
-    ctx.lineWidth = 0.5
-    for (let i = 0; i < 36; i += 1) {
-      ctx.beginPath()
-      ctx.moveTo((i / 36) * canvas.width, 0)
-      ctx.lineTo((i / 36) * canvas.width, canvas.height)
-      ctx.stroke()
-    }
-    for (let i = 0; i < 18; i += 1) {
-      ctx.beginPath()
-      ctx.moveTo(0, (i / 18) * canvas.height)
-      ctx.lineTo(canvas.width, (i / 18) * canvas.height)
-      ctx.stroke()
-    }
-
-    const texture = new THREE.CanvasTexture(canvas)
-    return new THREE.MeshPhongMaterial({
-      map: texture,
-      specular: new THREE.Color(0x2f2f2f),
-      shininess: 14,
+    return new THREE.MeshBasicMaterial({
+      map: surfaceMap ?? undefined,
+      color: surfaceMap ? "#ffffff" : "#173b5f",
+      toneMapped: false,
     })
-  }, [])
+  }, [surfaceMap])
 
-  useFrame(() => {
-    if (meshRef.current) meshRef.current.rotation.y += 0.0002
-  })
+  useEffect(() => {
+    return () => {
+      material.dispose()
+    }
+  }, [material])
 
   return (
-    <mesh ref={meshRef} material={material}>
+    <mesh material={material}>
       <sphereGeometry args={[1, 64, 64]} />
     </mesh>
   )
@@ -93,7 +98,7 @@ function Atmosphere() {
   return (
     <mesh>
       <sphereGeometry args={[1.015, 64, 64]} />
-      <meshPhongMaterial color="#73a5ff" transparent opacity={0.08} side={THREE.BackSide} />
+      <meshBasicMaterial color="#73a5ff" transparent opacity={0.1} side={THREE.BackSide} />
     </mesh>
   )
 }
@@ -146,12 +151,10 @@ function MockObjects({ count = 2400 }: { count?: number }) {
 
     const t = clock.elapsedTime
     orbits.forEach((orbit, index) => {
-      // Orbital-plane angle.
       const u = orbit.phaseAtEpoch + orbit.argumentOfPerigee + t * orbit.speed
       const xOrb = orbit.radius * Math.cos(u)
       const yOrb = orbit.radius * Math.sin(u)
 
-      // Rotate from orbital plane into ECI-like frame by inclination + RAAN.
       const cosI = Math.cos(orbit.inclination)
       const sinI = Math.sin(orbit.inclination)
       const cosO = Math.cos(orbit.ascendingNode)
@@ -186,8 +189,6 @@ function Scene({ positions }: { positions: THREE.Vector3[] }) {
 
   return (
     <>
-      <ambientLight intensity={0.35} />
-      <directionalLight position={[5, 3, 5]} intensity={1.2} />
       <Stars radius={100} depth={60} count={4200} factor={3.6} saturation={0} />
       <Earth />
       <Atmosphere />
@@ -204,12 +205,36 @@ function Scene({ positions }: { positions: THREE.Vector3[] }) {
   )
 }
 
-function toScaledVector(position: [number, number, number]): THREE.Vector3 | null {
+function toScaledVector(position: [number, number, number] | undefined): THREE.Vector3 | null {
+  if (!position) return null
   const [x, y, z] = position
   if (![x, y, z].every(Number.isFinite)) return null
   const magnitude = Math.sqrt(x * x + y * y + z * z)
   if (magnitude < EARTH_RADIUS_M * 0.9 || magnitude > EARTH_RADIUS_M * 10) return null
   return new THREE.Vector3(x * SCALE, y * SCALE, z * SCALE)
+}
+
+function toGeodeticVector(entry: ApiOrbitalObject): THREE.Vector3 | null {
+  const lat = entry.lat
+  const lon = entry.lon
+  const altKm = entry.alt_km ?? 0
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(altKm)) return null
+
+  const latValue = lat as number
+  const lonValue = lon as number
+  if (Math.abs(latValue) > 90 || Math.abs(lonValue) > 360) return null
+
+  const cartesian = geodeticToUnitVector(latValue, lonValue, altKm)
+  const magnitude = Math.sqrt(
+    cartesian.x * cartesian.x +
+    cartesian.y * cartesian.y +
+    cartesian.z * cartesian.z
+  )
+
+  if (magnitude < 0.9 || magnitude > 10) return null
+
+  return new THREE.Vector3(cartesian.x, cartesian.y, cartesian.z)
 }
 
 interface GlobeViewProps {
@@ -230,7 +255,7 @@ export function GlobeView({ compacted = false }: GlobeViewProps) {
 
         const objects = (await response.json()) as ApiOrbitalObject[]
         const scaled = objects
-          .map((entry) => toScaledVector(entry.position))
+          .map((entry) => toGeodeticVector(entry) ?? toScaledVector(entry.position))
           .filter((value): value is THREE.Vector3 => value !== null)
 
         if (scaled.length > 0) {
