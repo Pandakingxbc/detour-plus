@@ -8,7 +8,7 @@ import {
   MAX_DEBRIS_OBJECTS,
   MED_RISK_KM,
 } from "@/lib/server/config"
-import { getConstraints, getServerState } from "@/lib/server/state"
+import { getConstraints, getServerState, getManualSatellite } from "@/lib/server/state"
 import { distanceKm, orbitClassForAltitude, propagateStateAt, satrecFromTle } from "@/lib/server/sgp4"
 import { getDebrisTles, getTargetTle } from "@/lib/server/tle"
 import type { ConjunctionEvent, OrbitClass } from "@/lib/server/types"
@@ -88,6 +88,133 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
     return cached.data
   }
 
+  const generatedAt = new Date()
+  const generatedAtMs = generatedAt.getTime()
+  const totalSteps = Math.floor((normalized.horizonHours * 3600) / normalized.stepSec)
+
+  const sampleTimes: Date[] = []
+  const targetSeries: Array<{ x: number; y: number; z: number } | null> = []
+
+  // Handle manual satellite (NORAD ID = -1)
+  if (normalized.noradId === -1) {
+    const manualSat = getManualSatellite()
+    if (!manualSat) {
+      throw new Error("Manual satellite not loaded")
+    }
+
+    const debrisEntry = await getDebrisTles()
+
+    // Calculate time elapsed since satellite was loaded
+    const satelliteAgeMs = generatedAtMs - manualSat.loadedAtMs
+    const trajectoryDurationSec = manualSat.times[manualSat.times.length - 1] || 1
+
+    // Use manual satellite trajectory with time offset
+    for (let step = 0; step <= totalSteps; step += 1) {
+      const when = new Date(generatedAtMs + step * normalized.stepSec * 1000)
+      sampleTimes.push(when)
+
+      // Time from when satellite was loaded (in seconds)
+      const timeSinceLoadSec = (satelliteAgeMs + step * normalized.stepSec * 1000) / 1000
+
+      // Loop the trajectory for continuous orbit
+      const loopedTimeSec = timeSinceLoadSec % trajectoryDurationSec
+
+      // Find closest time index in trajectory
+      let closestIdx = 0
+      let minDiff = Math.abs(manualSat.times[0] - loopedTimeSec)
+      for (let i = 1; i < manualSat.times.length; i++) {
+        const diff = Math.abs(manualSat.times[i] - loopedTimeSec)
+        if (diff < minDiff) {
+          minDiff = diff
+          closestIdx = i
+        }
+      }
+
+      if (closestIdx >= 0 && closestIdx < manualSat.positions.length) {
+        const pos = manualSat.positions[closestIdx]
+        targetSeries.push({ x: pos[0] / 1000, y: pos[1] / 1000, z: pos[2] / 1000 }) // Convert m to km
+      } else {
+        targetSeries.push(null)
+      }
+    }
+
+    // Continue with conjunction detection using debrisEntry
+    const allowedClasses = new Set(normalized.orbitClasses)
+    const debrisPool: Array<{ noradId: number; satrec: ReturnType<typeof satrecFromTle> }> = []
+
+    for (let idx = 0; idx < debrisEntry.objects.length; idx += 1) {
+      if (debrisPool.length >= normalized.debrisLimit) break
+
+      const candidate = debrisEntry.objects[idx]
+      const satrec = satrecFromTle(candidate)
+      const currentState = propagateStateAt(satrec, generatedAt)
+      if (!currentState) continue
+
+      const orbitClass = orbitClassForAltitude(currentState.altKm)
+      if (!allowedClasses.has(orbitClass)) continue
+
+      debrisPool.push({ noradId: candidate.noradId, satrec })
+    }
+
+    const events: ConjunctionEvent[] = []
+
+    for (let idx = 0; idx < debrisPool.length; idx += 1) {
+      const debris = debrisPool[idx]
+
+      let bestDistanceKm = Number.POSITIVE_INFINITY
+      let bestStep = -1
+
+      for (let step = 0; step < sampleTimes.length; step += 1) {
+        const targetPos = targetSeries[step]
+        if (!targetPos) continue
+
+        const debrisState = propagateStateAt(debris.satrec, sampleTimes[step])
+        if (!debrisState) continue
+
+        const missKm = distanceKm(targetPos, debrisState.eci)
+        if (missKm < bestDistanceKm) {
+          bestDistanceKm = missKm
+          bestStep = step
+        }
+      }
+
+      if (!Number.isFinite(bestDistanceKm) || bestStep < 0) continue
+
+      const tcaTime = sampleTimes[bestStep]
+      const tcaInMinutes = Math.round((tcaTime.getTime() - generatedAtMs) / 60000)
+      const risk = riskFromMissKm(bestDistanceKm)
+
+      events.push({
+        eventId: `evt_${debris.noradId}_${bestStep}`,
+        tcaUtc: tcaTime.toISOString(),
+        tcaInMinutes,
+        missKm: Number(bestDistanceKm.toFixed(3)),
+        risk,
+        secondaryNorad: debris.noradId,
+      })
+    }
+
+    events.sort((a, b) => {
+      if (a.missKm !== b.missKm) return a.missKm - b.missKm
+      return a.tcaInMinutes - b.tcaInMinutes
+    })
+
+    const response: FeedResponse = {
+      generatedAtUtc: generatedAt.toISOString(),
+      horizonHours: normalized.horizonHours,
+      stepSec: normalized.stepSec,
+      events: events.slice(0, normalized.maxEvents),
+    }
+
+    state.feedByKey.set(key, {
+      generatedAtMs,
+      data: response,
+    })
+
+    return response
+  }
+
+  // Regular satellite (existing code)
   const [targetTleEntry, debrisEntry] = await Promise.all([
     getTargetTle(normalized.noradId),
     getDebrisTles(),
@@ -98,12 +225,6 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
     throw new Error(`Target TLE missing for NORAD ${normalized.noradId}`)
   }
 
-  const generatedAt = new Date()
-  const generatedAtMs = generatedAt.getTime()
-  const totalSteps = Math.floor((normalized.horizonHours * 3600) / normalized.stepSec)
-
-  const sampleTimes: Date[] = []
-  const targetSeries: Array<{ x: number; y: number; z: number } | null> = []
   const targetSatrec = satrecFromTle(target)
 
   for (let step = 0; step <= totalSteps; step += 1) {

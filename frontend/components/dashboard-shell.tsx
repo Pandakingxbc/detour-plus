@@ -101,7 +101,7 @@ export function DashboardShell() {
             icon={Activity}
             title="Target + Live Feed"
           >
-            <LeftPanelContent onPrimaryIdChange={setActivePrimaryId} />
+            <LeftPanelContent onPrimaryIdChange={setActivePrimaryId} activePrimaryId={activePrimaryId} />
           </SidePanel>
 
           <div className="hidden lg:block lg:col-start-2 lg:row-start-1" />
