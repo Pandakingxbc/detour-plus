@@ -223,9 +223,9 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
         </dl>
       </section>
 
-      <section className="min-h-0 flex-1 rounded-md border border-border/70 bg-background/45 p-3">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Live CDM / Conjunction Feed</p>
+      <section className="min-h-0 flex flex-1 flex-col rounded-md border border-border/70 bg-background/45 p-3">
+        <div className="mb-2 shrink-0 flex items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Live Conjunction Feed</p>
           <button
             type="button"
             onClick={() => {
@@ -240,9 +240,9 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
           </button>
         </div>
 
-        <div className="max-h-[46vh] overflow-auto rounded-md border border-border/60">
+        <div className="scrollbar-hidden min-h-0 flex-1 overflow-auto rounded-md border border-border/60">
           <table className="w-full border-collapse text-xs">
-            <thead className="sticky top-0 bg-black/60 text-muted-foreground">
+            <thead className="sticky top-0 bg-black text-muted-foreground">
               <tr>
                 <th className="px-2.5 py-2 text-left font-medium">TCA</th>
                 <th className="px-2.5 py-2 text-left font-medium">Miss</th>
@@ -273,10 +273,6 @@ export function LeftPanelContent({ onPrimaryIdChange }: LeftPanelContentProps) {
             </tbody>
           </table>
         </div>
-
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          Generated: {formatUtc(feed?.generatedAtUtc)} · Read-only feed for visualization only.
-        </p>
       </section>
     </div>
   )
