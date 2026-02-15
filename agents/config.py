@@ -2,23 +2,27 @@
 LLM configuration for the Detour agent system.
 
 Supports three modes:
-  1. LOCAL  — Nemotron on the GX10 via vLLM (primary, for NVIDIA prize)
+  1. LOCAL  — Nemotron on the GX10 via NGC vLLM container (primary, for NVIDIA prize)
   2. NIM    — NVIDIA API Catalog / NIM endpoint (fallback)
   3. OPENAI — OpenAI-compatible endpoint (dev/testing)
 
-The GX10 (Grace Blackwell, 128GB unified memory) can run:
+The GX10 (Grace Blackwell, 128GB unified memory) runs:
   - nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 (~60GB, recommended by NVIDIA)
-  - nvidia/Nemotron-3-Nano-4B (tiny, ultra-fast for routing)
+  - Served via NGC vLLM container: nvcr.io/nvidia/vllm:26.01-py3
 
-vLLM serve command for GX10:
-  vllm serve nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \\
-      --trust-remote-code \\
-      --max-model-len 32768 \\
-      --gpu-memory-utilization 0.92 \\
-      --dtype auto \\
-      --enable-auto-tool-choice \\
-      --tool-call-parser hermes \\
-      --port 8001
+Start with:
+  docker run --gpus all -d -p 8001:8000 \\
+      -v ~/.cache/huggingface:/root/.cache/huggingface \\
+      --name detour-vllm \\
+      nvcr.io/nvidia/vllm:26.01-py3 \\
+      python3 -m vllm.entrypoints.openai.api_server \\
+          --model nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \\
+          --trust-remote-code \\
+          --max-model-len 32768 \\
+          --gpu-memory-utilization 0.92 \\
+          --dtype auto \\
+          --enable-auto-tool-choice \\
+          --tool-call-parser hermes
 """
 from __future__ import annotations
 
