@@ -28,7 +28,7 @@ export function parseOrbitClasses(value: string | undefined, fallback: OrbitClas
 }
 
 export const TARGET_TLE_CACHE_MS = parsePositiveInt(process.env.TLE_CACHE_MS, 10 * 60 * 1000)
-export const FEED_CACHE_MS = parsePositiveInt(process.env.FEED_CACHE_MS, 45 * 1000)
+export const FEED_CACHE_MS = parsePositiveInt(process.env.FEED_CACHE_MS, 5 * 1000)
 export const DEFAULT_DEBRIS_GROUP = process.env.TLE_DEBRIS_GROUP ?? "active"
 export const MAX_DEBRIS_OBJECTS = parsePositiveInt(process.env.MAX_DEBRIS_OBJECTS, 3000)
 export const DEFAULT_DEBRIS_LIMIT = parsePositiveInt(process.env.DEFAULT_DEBRIS_LIMIT, 1500)

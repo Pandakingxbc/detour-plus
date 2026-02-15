@@ -5,8 +5,8 @@ import { Loader2, RefreshCw, Search } from "lucide-react"
 
 const DEFAULT_NORAD = "25544"
 const DEFAULT_MAX_ROWS = 8
-const DEFAULT_FEED_POLL_MS = 20_000
-const MANUAL_FEED_POLL_MS = 1_000
+const DEFAULT_FEED_POLL_MS = 5_000
+const MANUAL_FEED_POLL_MS = 5_000
 
 interface TargetResponse {
   noradId: number
@@ -105,11 +105,19 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskCha
     return () => window.clearTimeout(timer)
   }, [toastMessage])
 
-  const loadFeed = useCallback(async (noradId: number) => {
+  const loadFeed = useCallback(async (noradId: number, options?: { forceRefresh?: boolean }) => {
     setFeedLoading(true)
 
     try {
-      const response = await fetch(`/api/feed?norad=${noradId}&maxEvents=${DEFAULT_MAX_ROWS}`, {
+      const query = new URLSearchParams({
+        norad: String(noradId),
+        maxEvents: String(DEFAULT_MAX_ROWS),
+      })
+      if (options?.forceRefresh) {
+        query.set("force", "1")
+      }
+
+      const response = await fetch(`/api/feed?${query.toString()}`, {
         cache: "no-store",
       })
       if (!response.ok) {
@@ -272,7 +280,7 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskCha
             type="button"
             onClick={() => {
               if (activeNorad) {
-                void loadFeed(activeNorad)
+                void loadFeed(activeNorad, { forceRefresh: true })
               }
             }}
             className="inline-flex h-7 items-center gap-1 rounded-md border border-border/70 px-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"

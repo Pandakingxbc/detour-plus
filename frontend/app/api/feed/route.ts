@@ -37,6 +37,8 @@ export async function GET(request: NextRequest) {
   const maxEvents = parsePositive(params.get("maxEvents"), DEFAULT_FEED_MAX_EVENTS)
   const debrisLimit = parsePositive(params.get("debrisLimit"), MAX_DEBRIS_OBJECTS)
   const orbitClasses = parseOrbitClasses(params.get("orbitClasses") ?? undefined, DEFAULT_ORBIT_CLASSES)
+  const forceRaw = params.get("force")
+  const forceRefresh = forceRaw === "1" || forceRaw?.toLowerCase() === "true"
 
   try {
     const feed = await buildConjunctionFeed({
@@ -46,6 +48,7 @@ export async function GET(request: NextRequest) {
       maxEvents,
       debrisLimit,
       orbitClasses,
+      forceRefresh,
     })
 
     return NextResponse.json(feed)
