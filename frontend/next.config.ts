@@ -1,10 +1,26 @@
 import type { NextConfig } from "next"
 
+const AGENT_BACKEND = process.env.AGENT_API_URL ?? "https://detour-backend.keanuc.net"
+const LLM_BACKEND = process.env.LLM_API_URL ?? "https://detour.keanuc.net"
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  // Environment variable so the Next.js API route can reach the Python agent backend
   env: {
-    AGENT_API_URL: process.env.AGENT_API_URL ?? "http://localhost:8000",
+    AGENT_API_URL: AGENT_BACKEND,
+  },
+  async rewrites() {
+    return [
+      // /api/agent/* → Python FastAPI agent backend (strips /api prefix)
+      {
+        source: "/api/agent/:path*",
+        destination: `${AGENT_BACKEND}/agent/:path*`,
+      },
+      // /chat/completion → LLM inference backend
+      {
+        source: "/chat/completion",
+        destination: `${LLM_BACKEND}/chat/completion`,
+      },
+    ]
   },
 }
 
