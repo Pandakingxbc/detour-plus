@@ -127,3 +127,10 @@ class ManeuverSimulateRequest(BaseModel):
     burn_time_sec: float = 0.0
     window_sec: float = 7200.0
     check_secondary: bool = False
+
+
+class ManualSatelliteRequest(BaseModel):
+    radius_km: float = Field(description="Orbital radius from Earth center in km")
+    speed_mps: float = Field(description="Orbital speed in m/s")
+    duration_sec: float = Field(default=5400, description="Trajectory duration in seconds")
+    dt: float = Field(default=60, description="Timestep in seconds")
