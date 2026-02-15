@@ -19,10 +19,10 @@
 set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────
-MODEL="${1:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16}"
+MODEL="${1:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4}"
 PORT="${2:-8001}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-GPU_MEM="${GPU_MEM:-0.92}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
+GPU_MEM="${GPU_MEM:-0.90}"
 NGC_IMAGE="nvcr.io/nvidia/vllm:26.01-py3"
 CONTAINER_NAME="detour-vllm"
 HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}"
@@ -99,8 +99,10 @@ echo "      --trust-remote-code \\"
 echo "      --max-model-len ${MAX_MODEL_LEN} \\"
 echo "      --gpu-memory-utilization ${GPU_MEM} \\"
 echo "      --dtype auto \\"
+echo "      --enable-chunked-prefill \\"
 echo "      --enable-auto-tool-choice \\"
-echo "      --tool-call-parser hermes"
+echo "      --tool-call-parser hermes \\"
+echo "      --enable-chunked-prefill"
 echo ""
 
 # Stop any existing container with same name
@@ -121,13 +123,14 @@ docker run --gpus all \
         --gpu-memory-utilization "${GPU_MEM}" \
         --dtype auto \
         --enable-auto-tool-choice \
-        --tool-call-parser hermes
+        --tool-call-parser hermes \
+        --enable-chunked-prefill
 
 echo "  Container started: ${CONTAINER_NAME}"
 echo "  Logs: docker logs -f ${CONTAINER_NAME}"
 
 # Wait for server to be ready
-echo "  Waiting for server to be ready (first run downloads ~60GB model)..."
+echo "  Waiting for server to be ready (first run downloads ~15GB model)..."
 for i in $(seq 1 300); do
     if curl -s "http://localhost:${PORT}/v1/models" > /dev/null 2>&1; then
         echo ""
@@ -156,6 +159,6 @@ echo ""
 echo "  ⚠ Server did not become ready within 10 minutes."
 echo "  Check container logs: docker logs ${CONTAINER_NAME}"
 echo "  Common issues:"
-echo "    - Model still downloading (first run is ~60GB)"
+echo "    - Model still downloading (first run is ~15GB)"
 echo "    - OOM: try 'sudo sync && echo 3 > /proc/sys/vm/drop_caches' then retry"
 echo "    - Reduce --max-model-len or --gpu-memory-utilization"

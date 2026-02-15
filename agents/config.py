@@ -7,7 +7,7 @@ Supports three modes:
   3. OPENAI — OpenAI-compatible endpoint (dev/testing)
 
 The GX10 (Grace Blackwell, 128GB unified memory) runs:
-  - nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 (~60GB, recommended by NVIDIA)
+  - nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4 (~15GB, 4-bit quantized)
   - Served via NGC vLLM container: nvcr.io/nvidia/vllm:26.01-py3
 
 Start with:
@@ -16,13 +16,14 @@ Start with:
       --name detour-vllm \\
       nvcr.io/nvidia/vllm:26.01-py3 \\
       python3 -m vllm.entrypoints.openai.api_server \\
-          --model nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 \\
+          --model nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4 \\
           --trust-remote-code \\
-          --max-model-len 32768 \\
-          --gpu-memory-utilization 0.92 \\
+          --max-model-len 8192 \\
+          --gpu-memory-utilization 0.90 \\
           --dtype auto \\
           --enable-auto-tool-choice \\
-          --tool-call-parser hermes
+          --tool-call-parser hermes \\
+          --enable-chunked-prefill
 """
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ class LLMConfig:
     # Endpoint
     base_url: str = "http://localhost:8001/v1"
     api_key: str = "not-needed"
-    model: str = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+    model: str = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"
 
     # Generation parameters
     temperature: float = 0.3          # low for deterministic tool-calling
@@ -54,7 +55,7 @@ class LLMConfig:
         return cls(
             base_url=os.getenv("NEMOTRON_BASE_URL", "http://localhost:8001/v1"),
             api_key=os.getenv("NEMOTRON_API_KEY", "not-needed"),
-            model=os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"),
+            model=os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"),
             temperature=float(os.getenv("NEMOTRON_TEMPERATURE", "0.3")),
             max_tokens=int(os.getenv("NEMOTRON_MAX_TOKENS", "4096")),
         )
@@ -73,7 +74,7 @@ class LLMConfig:
 # Quick presets
 LOCAL_GX10 = LLMConfig(
     base_url="http://localhost:8001/v1",
-    model="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+    model="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
 )
 
 NVIDIA_NIM = LLMConfig(

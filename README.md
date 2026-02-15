@@ -95,9 +95,9 @@ python -m agents.run "Scan for threats" --demo
 
 ## Model
 
-**nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16** — recommended by NVIDIA for edge deployment on the Ascent GX10. ~60GB in BF16, fits comfortably in the 128GB unified memory of the Grace Blackwell SoC.
+**nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4** — 4-bit quantized (NVFP4) for fast edge inference on the Ascent GX10. ~15GB model weight footprint, leaving ample memory for KV cache and concurrent requests on the 128GB unified memory Grace Blackwell SoC.
 
-Served locally via vLLM with tool-calling support (`--enable-auto-tool-choice --tool-call-parser hermes`).
+Served locally via NGC vLLM container with tool-calling (`--enable-auto-tool-choice --tool-call-parser hermes --enable-chunked-prefill`).
 
 ## Why Edge AI?
 
