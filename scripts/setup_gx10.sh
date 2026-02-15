@@ -82,37 +82,36 @@ fi
 
 # ── Ensure CUDA libraries are on LD_LIBRARY_PATH ─────────────────────────
 # libcudart.so.12 may not be installed system-wide (GX10 ships without it).
-# pip install vllm pulls nvidia-cuda-runtime-cu12 which has it inside site-packages.
+# On aarch64, vLLM doesn't pull nvidia-cuda-runtime-cu12 automatically,
+# but PyTorch bundles CUDA libs inside its own package directory.
 echo ""
 echo "[*] Locating CUDA libraries..."
 CUDA_FOUND=false
-
-# Method 1: check inside pip packages (nvidia-cuda-runtime-cu12)
 SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "")
-for candidate in \
-    "${SITE_PKGS}/nvidia/cuda_runtime/lib" \
-    "${VENV_DIR}/lib/python3.12/site-packages/nvidia/cuda_runtime/lib" \
-    "${VENV_DIR}/lib/python3.*/site-packages/nvidia/cuda_runtime/lib"; do
-    # Use ls to expand globs
-    for p in $candidate; do
-        if [[ -d "$p" ]] && ls "$p"/libcudart.so.12* &>/dev/null 2>&1; then
-            export LD_LIBRARY_PATH="${p}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-            echo "  Found in pip package: ${p}"
-            CUDA_FOUND=true
-            break 2
-        fi
-    done
-done
 
-# Method 1b: also add all nvidia lib dirs from pip packages
-if [[ -n "${SITE_PKGS:-}" ]] && [[ -d "${SITE_PKGS}/nvidia" ]]; then
-    for nvlib in "${SITE_PKGS}"/nvidia/*/lib; do
-        [[ -d "$nvlib" ]] && export LD_LIBRARY_PATH="${nvlib}:${LD_LIBRARY_PATH}"
-    done
-    echo "  Added all nvidia pip lib dirs to LD_LIBRARY_PATH"
+# Method 1: PyTorch bundles libcudart inside torch/lib/
+TORCH_LIB=$(python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))" 2>/dev/null || echo "")
+if [[ -n "${TORCH_LIB}" ]] && [[ -d "${TORCH_LIB}" ]] && ls "${TORCH_LIB}"/libcudart.so* &>/dev/null 2>&1; then
+    export LD_LIBRARY_PATH="${TORCH_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    echo "  Found in torch: ${TORCH_LIB}"
+    CUDA_FOUND=true
 fi
 
-# Method 2: ldconfig cache
+# Method 2: nvidia-cuda-runtime-cu12 pip package
+if ! $CUDA_FOUND; then
+    for candidate in \
+        "${SITE_PKGS}/nvidia/cuda_runtime/lib" \
+        "${VENV_DIR}/lib/python3.12/site-packages/nvidia/cuda_runtime/lib"; do
+        if [[ -d "$candidate" ]] && ls "$candidate"/libcudart.so.12* &>/dev/null 2>&1; then
+            export LD_LIBRARY_PATH="${candidate}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            echo "  Found in nvidia-cuda-runtime: ${candidate}"
+            CUDA_FOUND=true
+            break
+        fi
+    done
+fi
+
+# Method 3: ldconfig cache
 if ! $CUDA_FOUND && command -v ldconfig &>/dev/null; then
     CUDART_PATH=$(ldconfig -p 2>/dev/null | grep libcudart.so.12 | head -1 | awk '{print $NF}')
     if [[ -n "${CUDART_PATH:-}" ]]; then
@@ -123,7 +122,7 @@ if ! $CUDA_FOUND && command -v ldconfig &>/dev/null; then
     fi
 fi
 
-# Method 3: search common system paths
+# Method 4: common system paths
 if ! $CUDA_FOUND; then
     for p in /usr/local/cuda/lib64 /usr/local/cuda-12/lib64 \
              /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu \
@@ -138,10 +137,10 @@ if ! $CUDA_FOUND; then
     done
 fi
 
-# Method 4: brute-force find everywhere
+# Method 5: brute-force find
 if ! $CUDA_FOUND; then
-    echo "  Searching entire filesystem for libcudart.so.12..."
-    CUDART_PATH=$(find / -name 'libcudart.so.12*' -type f 2>/dev/null | head -1)
+    echo "  Searching filesystem for libcudart.so.12..."
+    CUDART_PATH=$(find "${VENV_DIR}" /usr /opt -name 'libcudart.so.12*' 2>/dev/null | head -1)
     if [[ -n "${CUDART_PATH:-}" ]]; then
         CUDA_LIB_DIR=$(dirname "${CUDART_PATH}")
         export LD_LIBRARY_PATH="${CUDA_LIB_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -150,10 +149,27 @@ if ! $CUDA_FOUND; then
     fi
 fi
 
+# Also add all nvidia pip lib dirs (for libnccl, libcudnn, etc.)
+if [[ -n "${SITE_PKGS:-}" ]] && [[ -d "${SITE_PKGS}/nvidia" ]]; then
+    for nvlib in "${SITE_PKGS}"/nvidia/*/lib; do
+        [[ -d "$nvlib" ]] && export LD_LIBRARY_PATH="${nvlib}:${LD_LIBRARY_PATH}"
+    done
+    echo "  Added nvidia pip lib dirs"
+fi
+
 if ! $CUDA_FOUND; then
     echo "  ⚠ Could not find libcudart.so.12 anywhere!"
-    echo "  Try: pip install nvidia-cuda-runtime-cu12"
-    exit 1
+    echo "  Installing nvidia-cuda-runtime-cu12 explicitly..."
+    pip install nvidia-cuda-runtime-cu12
+    # Try torch path again after install
+    TORCH_LIB=$(python3 -c "import torch, os; print(os.path.join(os.path.dirname(torch.__file__), 'lib'))" 2>/dev/null || echo "")
+    if [[ -n "${TORCH_LIB}" ]] && [[ -d "${TORCH_LIB}" ]]; then
+        export LD_LIBRARY_PATH="${TORCH_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+    CUDA_RT_DIR=$(python3 -c "import nvidia.cuda_runtime, os; print(os.path.join(os.path.dirname(nvidia.cuda_runtime.__file__), 'lib'))" 2>/dev/null || echo "")
+    if [[ -n "${CUDA_RT_DIR}" ]] && [[ -d "${CUDA_RT_DIR}" ]]; then
+        export LD_LIBRARY_PATH="${CUDA_RT_DIR}:${LD_LIBRARY_PATH}"
+    fi
 fi
 
 echo "  LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
