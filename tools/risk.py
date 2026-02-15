@@ -118,6 +118,7 @@ def estimate_risk(
         level = "low"
         recommendation = "monitor"
 
+
     return {
         "risk_score": risk_score,
         "level": level,
