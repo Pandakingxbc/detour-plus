@@ -307,6 +307,128 @@ def propagate_orbit(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# 8. SATELLITE STATUS & RESOURCE MANAGEMENT
+# ─────────────────────────────────────────────────────────────────────────
+
+# Singleton satellite instance for the active session
+_active_satellite = None
+
+
+def _get_or_create_satellite():
+    """Get or create the active satellite instance."""
+    global _active_satellite
+    if _active_satellite is None:
+        import numpy as np
+        from engine.models.active_satellite import Satellite
+
+        # ISS-like default (420 km altitude, ~7.66 km/s)
+        EARTH_R = 6_378_137  # m
+        ALT = 420_000  # m
+        r = EARTH_R + ALT
+        _active_satellite = Satellite(
+            position=np.array([r * 0.8, r * 0.5, r * 0.3]),
+            velocity=np.array([-5500.0, 6000.0, 2000.0]),
+            name="DETOUR-SAT-1",
+        )
+    return _active_satellite
+
+
+@tool
+def get_satellite_status() -> str:
+    """
+    Get the operational status of the active satellite.
+
+    Returns comprehensive telemetry including:
+    - Position, velocity, altitude
+    - Fuel level and percentage
+    - Power/battery status
+    - Available delta-v
+    - Maneuver history count
+
+    Use this BEFORE planning maneuvers to check resource availability.
+    """
+    sat = _get_or_create_satellite()
+    status = sat.get_status()
+    return json.dumps(status, default=str)
+
+
+@tool
+def check_maneuver_feasibility(
+    delta_v_ms: Annotated[float, "Maneuver delta-v magnitude in m/s"],
+    min_fuel_margin_kg: Annotated[float, "Minimum fuel to keep in reserve (kg)"] = 1.0,
+) -> str:
+    """
+    Check if the satellite can execute a maneuver given current resources.
+
+    Evaluates:
+    - Fuel sufficiency (including reserve margin)
+    - Power availability for thruster operation
+    - Operational status
+
+    Returns feasibility assessment with resource impact estimates.
+    """
+    sat = _get_or_create_satellite()
+    import numpy as np
+
+    feasible = sat.can_perform_maneuver(delta_v_ms, min_fuel_margin_kg)
+
+    # Estimate fuel cost
+    mass_ratio = np.exp(delta_v_ms / (sat.exhaust_velocity * 1000.0))
+    fuel_needed = sat.total_mass * (1 - 1 / mass_ratio)
+
+    result = {
+        "feasible": feasible,
+        "delta_v_requested_ms": delta_v_ms,
+        "fuel_required_kg": round(fuel_needed, 3),
+        "fuel_available_kg": round(sat.fuel, 3),
+        "fuel_after_maneuver_kg": round(sat.fuel - fuel_needed, 3) if feasible else None,
+        "fuel_percentage_after": round(
+            (sat.fuel - fuel_needed) / (sat.total_mass - sat.dry_mass) * 100, 1
+        ) if feasible else None,
+        "power_ok": sat.power >= sat.maneuver_power_draw * (60.0 / 3600.0),
+        "satellite_operational": sat.is_operational,
+        "max_delta_v_available_ms": round(sat.max_delta_v, 2),
+    }
+    return json.dumps(result, default=str)
+
+
+@tool
+def execute_maneuver_on_satellite(
+    delta_v_x: Annotated[float, "Delta-v X component in m/s (ECI)"],
+    delta_v_y: Annotated[float, "Delta-v Y component in m/s (ECI)"],
+    delta_v_z: Annotated[float, "Delta-v Z component in m/s (ECI)"],
+) -> str:
+    """
+    Execute a maneuver on the active satellite, updating its state.
+
+    This applies the delta-v, consumes fuel and power, and records
+    the maneuver in the satellite's history. Only call this after
+    the Safety agent has approved the maneuver.
+
+    Returns updated satellite status after maneuver execution.
+    """
+    import numpy as np
+
+    sat = _get_or_create_satellite()
+    dv = np.array([delta_v_x, delta_v_y, delta_v_z])
+    dv_mag = np.linalg.norm(dv)
+
+    if not sat.can_perform_maneuver(dv_mag):
+        return json.dumps({
+            "executed": False,
+            "reason": "Insufficient resources for maneuver",
+            "delta_v_requested": dv_mag,
+            "max_delta_v_available": sat.max_delta_v,
+        })
+
+    sat.apply_maneuver(dv)
+    status = sat.get_status()
+    status["executed"] = True
+    status["delta_v_applied_ms"] = round(dv_mag, 4)
+    return json.dumps(status, default=str)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # TOOL REGISTRY
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -317,10 +439,21 @@ SCOUT_TOOLS = [scan_conjunctions, scan_demo_conjunctions]
 ANALYST_TOOLS = [assess_risk, refine_conjunction, propagate_orbit]
 
 # Tools available to the Planner agent
-PLANNER_TOOLS = [propose_avoidance_maneuvers, simulate_maneuver]
+PLANNER_TOOLS = [
+    propose_avoidance_maneuvers,
+    simulate_maneuver,
+    get_satellite_status,
+    check_maneuver_feasibility,
+]
 
 # Tools available to the Safety agent
-SAFETY_TOOLS = [check_maneuver_constraints, simulate_maneuver]
+SAFETY_TOOLS = [
+    check_maneuver_constraints,
+    simulate_maneuver,
+    get_satellite_status,
+    check_maneuver_feasibility,
+    execute_maneuver_on_satellite,
+]
 
 # All tools (for single-agent mode)
 ALL_TOOLS = [
@@ -332,4 +465,7 @@ ALL_TOOLS = [
     simulate_maneuver,
     check_maneuver_constraints,
     propagate_orbit,
+    get_satellite_status,
+    check_maneuver_feasibility,
+    execute_maneuver_on_satellite,
 ]

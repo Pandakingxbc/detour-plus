@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from fastapi import APIRouter, Query
 
-from engine.models.satellite import Satellite
+from engine.models.active_satellite import Satellite
 
 router = APIRouter(prefix="/api/satellite-demo", tags=["satellite-demo"])
 
