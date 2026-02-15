@@ -29,14 +29,13 @@ for arg in "$@"; do
 done
 
 # ── Configuration ────────────────────────────────────────────────────────
-# NOTE: NVFP4 variant has a bug in vLLM <=0.13.0 (NGC 26.01):
-#   "Non-gated activations are only supported by the flashinfer CUTLASS backend"
-#   The Nemotron-H shared-expert MoE layers crash during profile_run().
-#   Use BF16 instead — at ~60GB it fits in 128GB unified memory with 4K context.
-MODEL="${MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16}"
+# NVFP4: ~15GB model, fits easily in 128GB unified memory.
+# NOTE: The NGC Docker container (26.01) has a bug with NVFP4 MoE shared experts.
+#   Use bare-metal mode (default) which installs mainline vLLM + flashinfer.
+MODEL="${MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4}"
 PORT="${PORT:-8001}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
-GPU_MEM="${GPU_MEM:-0.85}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
+GPU_MEM="${GPU_MEM:-0.90}"
 NGC_IMAGE="nvcr.io/nvidia/vllm:26.01-py3"
 CONTAINER_NAME="detour-vllm"
 HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}"
@@ -125,8 +124,12 @@ else
     echo "  Using venv: ${VENV_DIR}"
 
     if ! python3 -c "import vllm" 2>/dev/null; then
-        echo "  Installing vLLM via pip (in venv)..."
+        echo "  Installing vLLM + flashinfer via pip (in venv)..."
         pip install --upgrade pip
+        # flashinfer provides the CUTLASS backend needed for NVFP4 MoE layers
+        pip install flashinfer -i https://flashinfer.ai/whl/cu124/torch2.6/ 2>/dev/null \
+            || pip install flashinfer 2>/dev/null \
+            || echo "  ⚠ flashinfer install failed (may not have aarch64 wheel). vLLM will try fallback kernels."
         pip install vllm
     else
         VLLM_VER=$(python3 -c "import vllm; print(vllm.__version__)")
