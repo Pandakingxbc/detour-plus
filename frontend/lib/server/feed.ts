@@ -13,6 +13,9 @@ import { distanceKm, orbitClassForAltitude, propagateStateAt, satrecFromTle } fr
 import { getDebrisTles, getTargetTle } from "@/lib/server/tle"
 import type { ConjunctionEvent, OrbitClass } from "@/lib/server/types"
 
+// Ignore effectively co-located objects (e.g. docked/same complex) from feed ranking.
+const MIN_MISS_KM_FOR_EVENT = 0.01
+
 // Simple RK4 propagator for manual satellite
 function propagateManualSatellite(
   position: number[],
@@ -130,8 +133,9 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
   const state = getServerState()
   const key = cacheKey(normalized)
   const nowMs = Date.now()
+  const feedCacheMs = normalized.noradId === -1 ? 0 : FEED_CACHE_MS
   const cached = state.feedByKey.get(key)
-  if (cached && nowMs - cached.generatedAtMs < FEED_CACHE_MS) {
+  if (cached && nowMs - cached.generatedAtMs < feedCacheMs) {
     return cached.data
   }
 
@@ -244,6 +248,7 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
       }
 
       if (!Number.isFinite(bestDistanceKm) || bestStep < 0) continue
+      if (bestDistanceKm <= MIN_MISS_KM_FOR_EVENT) continue
 
       const tcaTime = sampleTimes[bestStep]
       const tcaInMinutes = Math.round((tcaTime.getTime() - generatedAtMs) / 60000)
@@ -341,6 +346,7 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
     }
 
     if (!Number.isFinite(bestDistanceKm) || bestStep < 0) continue
+    if (bestDistanceKm <= MIN_MISS_KM_FOR_EVENT) continue
 
     const tcaTime = sampleTimes[bestStep]
     const tcaInMinutes = Math.round((tcaTime.getTime() - generatedAtMs) / 60000)

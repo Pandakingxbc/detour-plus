@@ -5,6 +5,8 @@ import { Loader2, RefreshCw, Search } from "lucide-react"
 
 const DEFAULT_NORAD = "25544"
 const DEFAULT_MAX_ROWS = 8
+const DEFAULT_FEED_POLL_MS = 20_000
+const MANUAL_FEED_POLL_MS = 1_000
 
 interface TargetResponse {
   noradId: number
@@ -107,7 +109,9 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskCha
     setFeedLoading(true)
 
     try {
-      const response = await fetch(`/api/feed?norad=${noradId}&maxEvents=${DEFAULT_MAX_ROWS}`)
+      const response = await fetch(`/api/feed?norad=${noradId}&maxEvents=${DEFAULT_MAX_ROWS}`, {
+        cache: "no-store",
+      })
       if (!response.ok) {
         const error = await response.json()
         throw new Error(error.detail || `Feed request failed (${response.status})`)
@@ -171,9 +175,10 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskCha
   useEffect(() => {
     if (!activeNorad) return
 
+    const pollMs = activeNorad === -1 ? MANUAL_FEED_POLL_MS : DEFAULT_FEED_POLL_MS
     const interval = window.setInterval(() => {
       void loadFeed(activeNorad)
-    }, 20_000)
+    }, pollMs)
 
     return () => window.clearInterval(interval)
   }, [activeNorad, loadFeed])
