@@ -108,9 +108,21 @@ if $USE_DOCKER; then
     echo "  Logs: docker logs -f ${CONTAINER_NAME}"
 else
     # ── Bare-metal mode ──────────────────────────────────────────────────
+    VENV_DIR="${VENV_DIR:-$HOME/.venv-vllm}"
+
+    if [[ ! -d "${VENV_DIR}" ]]; then
+        echo "  Creating venv at ${VENV_DIR}..."
+        python3 -m venv "${VENV_DIR}"
+    fi
+
+    # Activate venv for this session
+    source "${VENV_DIR}/bin/activate"
+    echo "  Using venv: ${VENV_DIR}"
+
     if ! python3 -c "import vllm" 2>/dev/null; then
-        echo "  Installing vLLM via pip..."
-        pip install vllm --upgrade
+        echo "  Installing vLLM via pip (in venv)..."
+        pip install --upgrade pip
+        pip install vllm
     else
         VLLM_VER=$(python3 -c "import vllm; print(vllm.__version__)")
         echo "  vLLM ${VLLM_VER} already installed ✓"
