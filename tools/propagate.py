@@ -48,7 +48,7 @@ def propagate_orbit(
 
     for i in range(steps):
         t = i * dt
-        state = solver.step(state, dt, t)
+        state = solver.step(state, dt)
         times.append(round(t + dt, 1))
         positions.append(state.r.tolist())
         velocities.append(state.v.tolist())

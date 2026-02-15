@@ -200,8 +200,8 @@ def simulate_maneuver(
 
     for i in range(steps):
         t = i * dt
-        sat_state = solver_s.step(sat_state, dt, t)
-        deb_state = solver_d.step(deb_state, dt, t)
+        sat_state = solver_s.step(sat_state, dt)
+        deb_state = solver_d.step(deb_state, dt)
         d = float(np.linalg.norm(sat_state.r - deb_state.r))
         if d < min_dist_before:
             min_dist_before = d
@@ -224,8 +224,8 @@ def simulate_maneuver(
             sat_state2 = State(sat_state2.r, sat_state2.v + dv)
             burn_applied = True
 
-        sat_state2 = solver_s2.step(sat_state2, dt, t)
-        deb_state2 = solver_d2.step(deb_state2, dt, t)
+        sat_state2 = solver_s2.step(sat_state2, dt)
+        deb_state2 = solver_d2.step(deb_state2, dt)
         d = float(np.linalg.norm(sat_state2.r - deb_state2.r))
         if d < min_dist_after:
             min_dist_after = d
