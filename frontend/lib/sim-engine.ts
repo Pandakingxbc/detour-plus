@@ -223,24 +223,27 @@ export class SimEngine {
    */
   private preComputeSafePath(): void {
     const SAFE_TICKS = 450 // 15s at 30 tps
-    const MAX_ATTEMPTS = 5
+    const MAX_ATTEMPTS = 7
     const ct = this.config.collisionThreshold
     const ROUGH_DEG_LIMIT = 25
 
-    // --- Realistic maneuver parameters ---
-    const BURN_INTERVAL = 30          // assess & burn every 1s (not every tick)
-    const LOOKAHEAD = 180             // project 6s ahead for conjunction assessment
-    const LOOKAHEAD_STEP = 6          // sample every 0.2s in the lookahead window
-    const DETECTION_RADIUS = 0.35     // scene-space detection range
-    const DRAG = 0.999                // very low drag — burns coast smoothly
+    // --- Avoidance parameters ---
+    // Per-tick repulsion: force = REPULSION_K / dist²  (in scene-space)
+    // Creates smooth curves: gentle far away, strong up close.
+    // Low drag means velocity persists → smooth orbital arcs.
+    const DETECTION_RADIUS = 0.30     // only consider debris within this scene-space range
+    const REPULSION_K = 0.000006      // base repulsion constant (tuned for deg/tick² output)
+    const DRAG = 0.999                // coast between interactions
 
     // Save RNG state — we'll restore it after so tick() replays the same sequence
     const rngState = this.rng.save()
 
     let bestPath: [number, number, number, number][] = []
+    let bestMinDist = 0
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const burnScale = Math.pow(2, attempt) // 1, 2, 4, 8, 16
+      const burnScale = Math.pow(2, attempt) // 1, 2, 4, 8, 16, 32, 64
+      const k = REPULSION_K * burnScale
       const path: [number, number, number, number][] = []
 
       // Reset RNG and debris snapshot for each attempt
@@ -255,6 +258,7 @@ export class SimEngine {
       let vLat = 0
       let vLon = 0
       let safe = true
+      let worstDist = Infinity
 
       for (let t = 0; t < SAFE_TICKS; t++) {
         // Step 1: Advance base orbit (matches tick() exactly)
@@ -275,84 +279,30 @@ export class SimEngine {
           if (d.lon < -180) d.lon += 360
         }
 
-        // Step 3: Conjunction assessment & burn (only at intervals — coast otherwise)
-        if (t % BURN_INTERVAL === 0) {
-          const satLat = bLat + adjLat
-          const satLon = bLon + adjLon
+        // Step 3: Per-tick repulsion — force ∝ 1/dist² (distance-dependent, NOT normalized)
+        // This is the key fix: close debris creates MUCH stronger force than far debris.
+        // At 2× threshold: force is 16× stronger than at 4× threshold.
+        const satLat = bLat + adjLat
+        const satLon = bLon + adjLon
 
-          // Project satellite and debris forward to find CPAs
-          let avoidLat = 0
-          let avoidLon = 0
+        for (const d of simDebris) {
+          const dLatDiff = satLat - d.lat
+          if (Math.abs(dLatDiff) > ROUGH_DEG_LIMIT) continue
+          let dLonDiff = satLon - d.lon
+          if (dLonDiff > 180) dLonDiff -= 360
+          if (dLonDiff < -180) dLonDiff += 360
+          if (Math.abs(dLonDiff) > ROUGH_DEG_LIMIT) continue
 
-          for (const d of simDebris) {
-            // Quick pre-filter on current position
-            const curLatDiff = Math.abs(satLat - d.lat)
-            if (curLatDiff > ROUGH_DEG_LIMIT) continue
-            let curLonDiff = satLon - d.lon
-            if (curLonDiff > 180) curLonDiff -= 360
-            if (curLonDiff < -180) curLonDiff += 360
-            if (Math.abs(curLonDiff) > ROUGH_DEG_LIMIT) continue
+          const dist = sceneDistance3D(satLat, satLon, this.config.startAltKm, d.lat, d.lon, d.altKm)
+          if (dist < DETECTION_RADIUS && dist > 0.001) {
+            // Unit direction in degree-space (debris → satellite)
+            const degMag = Math.sqrt(dLatDiff * dLatDiff + dLonDiff * dLonDiff)
+            if (degMag < 0.001) continue
 
-            // Find Closest Point of Approach over lookahead window
-            let cpaDist = Infinity
-            let cpaLook = 0
-            let cpaSatLat = satLat
-            let cpaSatLon = satLon
-            let cpaDLat = d.lat
-            let cpaDLon = d.lon
-
-            for (let look = 1; look <= LOOKAHEAD; look += LOOKAHEAD_STEP) {
-              // Project satellite: base orbit + current velocity adjustment
-              const futBLon = this.config.startLon + ORBIT_SPEED_DEG_PER_TICK * (t + look + 1)
-              const futBLat = this.config.startLat +
-                ORBIT_INCLINATION_DEG * 0.4 * Math.sin((2 * Math.PI * (t + look)) / ORBIT_INCLINATION_PERIOD_TICKS)
-              const futSatLat = futBLat + adjLat + vLat * look
-              const futSatLon = futBLon + adjLon + vLon * look
-
-              // Project debris linearly from current simulated position
-              const futDLat = d.lat + d.vLat * look
-              let futDLon = d.lon + d.vLon * look
-              if (futDLon > 180) futDLon -= 360
-              if (futDLon < -180) futDLon += 360
-
-              const dist = sceneDistance3D(
-                futSatLat, futSatLon, this.config.startAltKm,
-                futDLat, futDLon, d.altKm
-              )
-
-              if (dist < cpaDist) {
-                cpaDist = dist
-                cpaLook = look
-                cpaSatLat = futSatLat
-                cpaSatLon = futSatLon
-                cpaDLat = futDLat
-                cpaDLon = futDLon
-              }
-            }
-
-            // If CPA is within detection range, add avoidance vector
-            if (cpaDist < DETECTION_RADIUS) {
-              // Urgency: inverse-square of distance, decays with time
-              // Imminent close approaches get much more weight
-              const distWeight = 1 / (cpaDist * cpaDist + 0.0001)
-              const timeWeight = 1 / (1 + cpaLook / 60) // closer in time = more urgent
-              const weight = distWeight * timeWeight
-
-              // Avoidance direction: away from debris AT the CPA point
-              let dLon = cpaSatLon - cpaDLon
-              if (dLon > 180) dLon -= 360
-              if (dLon < -180) dLon += 360
-              avoidLat += (cpaSatLat - cpaDLat) * weight
-              avoidLon += dLon * weight
-            }
-          }
-
-          // Execute avoidance burn
-          const mag = Math.sqrt(avoidLat * avoidLat + avoidLon * avoidLon)
-          if (mag > 0.001) {
-            const burnStrength = 0.004 * burnScale
-            vLat += (avoidLat / mag) * burnStrength
-            vLon += (avoidLon / mag) * burnStrength
+            // Acceleration ∝ 1/dist² — strong when close, gentle when far
+            const force = k / (dist * dist)
+            vLat += (dLatDiff / degMag) * force
+            vLon += (dLonDiff / degMag) * force
           }
         }
 
@@ -385,14 +335,26 @@ export class SimEngine {
           if (dist < minDist) minDist = dist
         }
 
-        if (minDist < ct * 1.5) {
+        if (minDist < worstDist) worstDist = minDist
+
+        if (minDist < ct) {
           safe = false
           break
         }
       }
 
       bestPath = path
-      if (safe) break
+      bestMinDist = worstDist
+      if (safe) {
+        console.log(`[SafePath] attempt ${attempt} (scale ${burnScale}): SAFE — min dist ${worstDist.toFixed(4)} (threshold ${ct})`)
+        break
+      } else {
+        console.log(`[SafePath] attempt ${attempt} (scale ${burnScale}): FAIL — min dist ${worstDist.toFixed(4)} (threshold ${ct})`)
+      }
+    }
+
+    if (bestMinDist < ct) {
+      console.warn(`[SafePath] WARNING: no safe path found after ${MAX_ATTEMPTS} attempts! Min dist: ${bestMinDist.toFixed(4)}`)
     }
 
     this.safePath = bestPath
@@ -414,7 +376,7 @@ export class SimEngine {
         this.config.startLat, this.config.startLon, this.config.startAltKm,
         p.lat, p.lon, p.altKm
       )
-      if (spawnDist < this.config.collisionThreshold) continue // only skip exact spawn overlap
+      if (spawnDist < this.config.collisionThreshold * 2) continue // small buffer around spawn
 
       // Debris orbits at roughly similar speed to satellite with some variation
       const baseOrbitalVLon = 0.020 + rng() * 0.015 // ~60-100% of satellite speed
@@ -556,84 +518,39 @@ export class SimEngine {
       this.vAdjustLat = pVLat
       this.vAdjustLon = pVLon
     } else {
-      // --- Phase 2: Live CPA-based avoidance with degrading skill (after 15s) ---
-      // Same realistic approach as pre-computed path: conjunction assessment
-      // at intervals, CPA-based burns, coast between maneuvers.
-      // Skill degrades from 1.0 at 20s to 0 at 40s, affecting:
-      //   - Burn interval (slower decisions as skill drops)
-      //   - Lookahead range (shorter horizon)
-      //   - Detection radius (narrower awareness)
-      //   - Burn strength (weaker corrections)
+      // --- Phase 2: Live avoidance with degrading skill (after 15s) ---
+      // Same distance-dependent repulsion as pre-computed path.
+      // Skill degrades from 1.0 at 20s to 0 at 40s:
+      //   - Detection radius shrinks
+      //   - Repulsion force weakens
+      // Satellite gradually loses ability to dodge → gets trapped → collision.
 
-      // Coast: integrate velocity → position (low drag like pre-computed path)
+      const detectRadius = 0.06 + 0.24 * avoidanceSkill // 0.06-0.30
+      const k = 0.000006 * (0.5 + 4.5 * avoidanceSkill) // weakens with skill
+
+      for (const d of s.debris) {
+        const dLatDiff = s.satLat - d.lat
+        if (Math.abs(dLatDiff) > 15) continue
+        let dLonDiff = s.satLon - d.lon
+        if (dLonDiff > 180) dLonDiff -= 360
+        if (dLonDiff < -180) dLonDiff += 360
+        if (Math.abs(dLonDiff) > 15) continue
+
+        const dist = sceneDistance3D(s.satLat, s.satLon, s.satAltKm, d.lat, d.lon, d.altKm)
+        if (dist < detectRadius && dist > 0.001) {
+          const degMag = Math.sqrt(dLatDiff * dLatDiff + dLonDiff * dLonDiff)
+          if (degMag < 0.001) continue
+
+          const force = k / (dist * dist)
+          this.vAdjustLat += (dLatDiff / degMag) * force
+          this.vAdjustLon += (dLonDiff / degMag) * force
+        }
+      }
+
       this.adjustLat += this.vAdjustLat
       this.adjustLon += this.vAdjustLon
       this.vAdjustLat *= 0.999
       this.vAdjustLon *= 0.999
-
-      // Burn decision interval: 30 ticks at full skill → 90 ticks at low skill
-      const burnInterval = Math.round(30 + 60 * (1 - avoidanceSkill))
-
-      if (burnInterval > 0 && s.tickCount % burnInterval === 0 && avoidanceSkill > 0) {
-        const lookahead = Math.round(60 + 120 * avoidanceSkill) // 60-180 ticks
-        const detectRadius = 0.08 + 0.27 * avoidanceSkill       // 0.08-0.35
-
-        let avoidLat = 0
-        let avoidLon = 0
-
-        for (const d of s.debris) {
-          // Find CPA over lookahead window
-          let cpaDist = Infinity
-          let cpaLook = 0
-          let cpaSatLat = 0
-          let cpaSatLon = 0
-          let cpaDLat = 0
-          let cpaDLon = 0
-
-          for (let look = 1; look <= lookahead; look += 6) {
-            const futBLon = this.baseLon + ORBIT_SPEED_DEG_PER_TICK * look
-            const futTick = s.tickCount + look
-            const futBLat = this.config.startLat +
-              ORBIT_INCLINATION_DEG * 0.4 * Math.sin((2 * Math.PI * futTick) / ORBIT_INCLINATION_PERIOD_TICKS)
-            const futSatLat = futBLat + this.adjustLat + this.vAdjustLat * look
-            const futSatLon = futBLon + this.adjustLon + this.vAdjustLon * look
-
-            const futDLat = d.lat + d.vLat * look
-            let futDLon = d.lon + d.vLon * look
-            if (futDLon > 180) futDLon -= 360
-            if (futDLon < -180) futDLon += 360
-
-            const dist = sceneDistance3D(futSatLat, futSatLon, s.satAltKm, futDLat, futDLon, d.altKm)
-            if (dist < cpaDist) {
-              cpaDist = dist
-              cpaLook = look
-              cpaSatLat = futSatLat
-              cpaSatLon = futSatLon
-              cpaDLat = futDLat
-              cpaDLon = futDLon
-            }
-          }
-
-          if (cpaDist < detectRadius) {
-            const distWeight = 1 / (cpaDist * cpaDist + 0.0001)
-            const timeWeight = 1 / (1 + cpaLook / 60)
-            const weight = distWeight * timeWeight
-
-            let dLon = cpaSatLon - cpaDLon
-            if (dLon > 180) dLon -= 360
-            if (dLon < -180) dLon += 360
-            avoidLat += (cpaSatLat - cpaDLat) * weight
-            avoidLon += dLon * weight
-          }
-        }
-
-        const mag = Math.sqrt(avoidLat * avoidLat + avoidLon * avoidLon)
-        if (mag > 0.001) {
-          const burnStrength = 0.001 + 0.003 * avoidanceSkill
-          this.vAdjustLat += (avoidLat / mag) * burnStrength
-          this.vAdjustLon += (avoidLon / mag) * burnStrength
-        }
-      }
     }
 
     s.lastDirection = "HOLD"
