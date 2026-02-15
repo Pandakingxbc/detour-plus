@@ -29,10 +29,14 @@ for arg in "$@"; do
 done
 
 # ── Configuration ────────────────────────────────────────────────────────
-MODEL="${MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4}"
+# NOTE: NVFP4 variant has a bug in vLLM <=0.13.0 (NGC 26.01):
+#   "Non-gated activations are only supported by the flashinfer CUTLASS backend"
+#   The Nemotron-H shared-expert MoE layers crash during profile_run().
+#   Use BF16 instead — at ~60GB it fits in 128GB unified memory with 4K context.
+MODEL="${MODEL:-nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16}"
 PORT="${PORT:-8001}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
-GPU_MEM="${GPU_MEM:-0.90}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
+GPU_MEM="${GPU_MEM:-0.85}"
 NGC_IMAGE="nvcr.io/nvidia/vllm:26.01-py3"
 CONTAINER_NAME="detour-vllm"
 HF_CACHE="${HF_HOME:-$HOME/.cache/huggingface}"
@@ -100,6 +104,7 @@ if $USE_DOCKER; then
             --max-model-len "${MAX_MODEL_LEN}" \
             --gpu-memory-utilization "${GPU_MEM}" \
             --dtype auto \
+            --enforce-eager \
             --enable-auto-tool-choice \
             --tool-call-parser hermes \
             --enable-chunked-prefill
@@ -132,9 +137,11 @@ else
     echo "[4/4] Starting vLLM server (bare-metal)..."
     echo ""
     echo "  vllm serve ${MODEL} \\"
+    echo "      --trust-remote-code \\"
     echo "      --max-model-len ${MAX_MODEL_LEN} \\"
     echo "      --gpu-memory-utilization ${GPU_MEM} \\"
     echo "      --dtype auto \\"
+    echo "      --enforce-eager \\"
     echo "      --enable-auto-tool-choice \\"
     echo "      --tool-call-parser hermes \\"
     echo "      --enable-chunked-prefill \\"
@@ -142,9 +149,11 @@ else
     echo ""
 
     vllm serve "${MODEL}" \
+        --trust-remote-code \
         --max-model-len "${MAX_MODEL_LEN}" \
         --gpu-memory-utilization "${GPU_MEM}" \
         --dtype auto \
+        --enforce-eager \
         --enable-auto-tool-choice \
         --tool-call-parser hermes \
         --enable-chunked-prefill \
