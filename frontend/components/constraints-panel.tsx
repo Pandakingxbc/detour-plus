@@ -47,9 +47,11 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
 
   const isDirty = useMemo(() => !constraintsEqual(draft, appliedConstraints), [draft, appliedConstraints])
 
-  // Manual satellite state (defaults: 400km altitude LEO)
-  const [manualRadius, setManualRadius] = useState("6771") // Earth radius + 400km
-  const [manualSpeed, setManualSpeed] = useState("7670") // Circular orbit speed at 400km
+  // Manual satellite state (defaults: 400km altitude LEO, equatorial)
+  const [manualAltitude, setManualAltitude] = useState("400") // km above surface
+  const [manualSpeed, setManualSpeed] = useState("7670") // m/s
+  const [manualInclination, setManualInclination] = useState("0") // degrees
+  const [manualRaan, setManualRaan] = useState("0") // degrees
   const [manualLoading, setManualLoading] = useState(false)
   const [manualFeedback, setManualFeedback] = useState<string | null>(null)
 
@@ -79,16 +81,23 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
     setManualFeedback(null)
 
     try {
-      const radiusKm = parseFloat(manualRadius)
+      const altitudeKm = parseFloat(manualAltitude)
       const speedMps = parseFloat(manualSpeed)
+      const inclinationDeg = parseFloat(manualInclination)
+      const raanDeg = parseFloat(manualRaan)
 
-      if (isNaN(radiusKm) || isNaN(speedMps)) {
-        setManualFeedback("Invalid radius or speed value")
+      if (isNaN(altitudeKm) || isNaN(speedMps) || isNaN(inclinationDeg) || isNaN(raanDeg)) {
+        setManualFeedback("Invalid orbital parameter values")
         return
       }
 
-      if (radiusKm < 6371 || radiusKm > 50000) {
-        setManualFeedback("Radius must be between 6371 km (Earth surface) and 50000 km")
+      if (altitudeKm < 200 || altitudeKm > 40000) {
+        setManualFeedback("Altitude must be between 200 km and 40,000 km")
+        return
+      }
+
+      if (inclinationDeg < 0 || inclinationDeg > 180) {
+        setManualFeedback("Inclination must be between 0° and 180°")
         return
       }
 
@@ -96,8 +105,10 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          radius_km: radiusKm,
+          altitude_km: altitudeKm,
           speed_mps: speedMps,
+          inclination_deg: inclinationDeg,
+          raan_deg: raanDeg % 360, // Normalize to 0-360
           dt: 1 // 1 second timestep for smooth real-time animation
         })
       })
@@ -214,37 +225,75 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
       </form>
 
       <form className="space-y-3 rounded-md border border-cyan-500/40 bg-cyan-500/5 p-3" onSubmit={onManualSubmit}>
-        <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Manual Satellite</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-cyan-300">Manual Satellite (3D Orbit)</p>
 
-        <div className="space-y-1.5">
-          <label htmlFor="manual-radius" className="text-xs text-muted-foreground">
-            Radius (km from Earth center)
-          </label>
-          <input
-            id="manual-radius"
-            type="number"
-            step="1"
-            value={manualRadius}
-            onChange={(e) => setManualRadius(e.target.value)}
-            className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-cyan-500/60"
-            placeholder="6771"
-          />
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1.5">
+            <label htmlFor="manual-altitude" className="text-xs text-muted-foreground">
+              Altitude (km)
+            </label>
+            <input
+              id="manual-altitude"
+              type="number"
+              step="10"
+              value={manualAltitude}
+              onChange={(e) => setManualAltitude(e.target.value)}
+              className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-cyan-500/60"
+              placeholder="400"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="manual-speed" className="text-xs text-muted-foreground">
+              Speed (m/s)
+            </label>
+            <input
+              id="manual-speed"
+              type="number"
+              step="10"
+              value={manualSpeed}
+              onChange={(e) => setManualSpeed(e.target.value)}
+              className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-cyan-500/60"
+              placeholder="7670"
+            />
+          </div>
         </div>
 
-        <div className="space-y-1.5">
-          <label htmlFor="manual-speed" className="text-xs text-muted-foreground">
-            Speed (m/s)
-          </label>
-          <input
-            id="manual-speed"
-            type="number"
-            step="1"
-            value={manualSpeed}
-            onChange={(e) => setManualSpeed(e.target.value)}
-            className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-cyan-500/60"
-            placeholder="7670"
-          />
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1.5">
+            <label htmlFor="manual-inclination" className="text-xs text-muted-foreground">
+              Inclination (°)
+            </label>
+            <input
+              id="manual-inclination"
+              type="number"
+              step="5"
+              value={manualInclination}
+              onChange={(e) => setManualInclination(e.target.value)}
+              className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-cyan-500/60"
+              placeholder="0"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label htmlFor="manual-raan" className="text-xs text-muted-foreground">
+              RAAN (°)
+            </label>
+            <input
+              id="manual-raan"
+              type="number"
+              step="15"
+              value={manualRaan}
+              onChange={(e) => setManualRaan(e.target.value)}
+              className="h-9 w-full rounded-md border border-border/80 bg-background/70 px-3 text-sm outline-none transition-colors focus:border-cyan-500/60"
+              placeholder="0"
+            />
+          </div>
         </div>
+
+        <p className="text-[10px] text-muted-foreground">
+          Inclination: 0°=equatorial, 90°=polar • RAAN: orbit orientation (0-360°)
+        </p>
 
         <button
           type="submit"

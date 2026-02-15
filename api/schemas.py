@@ -130,7 +130,9 @@ class ManeuverSimulateRequest(BaseModel):
 
 
 class ManualSatelliteRequest(BaseModel):
-    radius_km: float = Field(description="Orbital radius from Earth center in km")
+    altitude_km: float = Field(description="Altitude above Earth surface in km")
     speed_mps: float = Field(description="Orbital speed in m/s")
+    inclination_deg: float = Field(default=0.0, description="Inclination in degrees (0=equatorial, 90=polar)")
+    raan_deg: float = Field(default=0.0, description="Right Ascension of Ascending Node in degrees (orbit orientation)")
     duration_sec: float = Field(default=5400, description="Trajectory duration in seconds")
     dt: float = Field(default=60, description="Timestep in seconds")

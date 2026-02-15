@@ -92,24 +92,57 @@ async def get_trajectory(
 @router.post("/manual/trajectory")
 async def get_manual_trajectory(request: ManualSatelliteRequest):
     """
-    Generate a perfect circular orbit at the given radius.
+    Generate a circular orbit with specified 3D orientation.
     Returns initial state vectors + trajectory for visualization.
     """
     import numpy as np
     import math
 
-    radius_m = request.radius_km * 1000.0
+    # Constants
+    EARTH_RADIUS = 6371000.0  # meters
 
-    # Initial state: position on x-axis, velocity on y-axis (circular equatorial orbit)
-    initial_position = [radius_m, 0.0, 0.0]
-    initial_velocity = [0.0, request.speed_mps, 0.0]
+    # Convert to radians
+    inclination = math.radians(request.inclination_deg)
+    raan = math.radians(request.raan_deg)
+
+    # Orbital radius
+    radius_m = EARTH_RADIUS + request.altitude_km * 1000.0
+
+    # Initial position in orbital plane (at ascending node)
+    # Start at ascending node: where orbit crosses equator going north
+    pos_orbital = np.array([radius_m, 0.0, 0.0])
+
+    # Initial velocity in orbital plane (perpendicular to position)
+    vel_orbital = np.array([0.0, request.speed_mps, 0.0])
+
+    # Rotation matrices to convert from orbital plane to ECI
+    # 1. Rotate by inclination around x-axis
+    R_i = np.array([
+        [1, 0, 0],
+        [0, math.cos(inclination), -math.sin(inclination)],
+        [0, math.sin(inclination), math.cos(inclination)]
+    ])
+
+    # 2. Rotate by RAAN around z-axis
+    R_raan = np.array([
+        [math.cos(raan), -math.sin(raan), 0],
+        [math.sin(raan), math.cos(raan), 0],
+        [0, 0, 1]
+    ])
+
+    # Combined rotation: first inclination, then RAAN
+    R_total = R_raan @ R_i
+
+    # Transform to ECI coordinates
+    initial_position = (R_total @ pos_orbital).tolist()
+    initial_velocity = (R_total @ vel_orbital).tolist()
     epoch = datetime.now(timezone.utc)
 
-    # Calculate orbital period from speed: T = 2πr/v
+    # Calculate orbital period
     circumference = 2 * math.pi * radius_m
     period_sec = circumference / request.speed_mps if request.speed_mps > 0 else 5400.0
 
-    # Generate points for 2 complete orbits (for visualization)
+    # Generate trajectory points for visualization (2 complete orbits)
     num_orbits = 2
     total_time = period_sec * num_orbits
     num_points = int(total_time / request.dt)
@@ -120,21 +153,27 @@ async def get_manual_trajectory(request: ManualSatelliteRequest):
 
     for i in range(num_points):
         t = i * request.dt
-        angle = (t / period_sec) * 2 * math.pi  # radians
+        angle = (t / period_sec) * 2 * math.pi
 
-        # Circular orbit in equatorial plane
-        x = radius_m * math.cos(angle)
-        y = radius_m * math.sin(angle)
-        z = 0.0
+        # Position in orbital plane
+        x_orb = radius_m * math.cos(angle)
+        y_orb = radius_m * math.sin(angle)
+        z_orb = 0.0
+        pos_orb = np.array([x_orb, y_orb, z_orb])
 
-        # Tangential velocity
-        vx = -request.speed_mps * math.sin(angle)
-        vy = request.speed_mps * math.cos(angle)
-        vz = 0.0
+        # Velocity in orbital plane
+        vx_orb = -request.speed_mps * math.sin(angle)
+        vy_orb = request.speed_mps * math.cos(angle)
+        vz_orb = 0.0
+        vel_orb = np.array([vx_orb, vy_orb, vz_orb])
+
+        # Transform to ECI
+        pos_eci = R_total @ pos_orb
+        vel_eci = R_total @ vel_orb
 
         times.append(t)
-        positions.append([x, y, z])
-        velocities.append([vx, vy, vz])
+        positions.append(pos_eci.tolist())
+        velocities.append(vel_eci.tolist())
 
     return {
         "norad_id": -1,
