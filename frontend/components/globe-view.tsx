@@ -278,69 +278,105 @@ function StaticObjects({
   )
 }
 
-function OrbitTrack({ points, isManual, maneuvering }: { points: THREE.Vector3[]; isManual?: boolean; maneuvering?: boolean }) {
+const MANEUVER_ANIM_SEC = 3.5
+
+function OrbitTrack({ points, isManual, maneuverStartMs }: { points: THREE.Vector3[]; isManual?: boolean; maneuverStartMs: number }) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lineRef = useRef<any>(null)
+  const normalColor = useMemo(() => new THREE.Color(isManual ? "#10b981" : "#7dd3fc"), [isManual])
+  const redColor = useMemo(() => new THREE.Color("#ef4444"), [])
+  const tempColor = useMemo(() => new THREE.Color(), [])
+
+  useFrame(() => {
+    const mat = lineRef.current?.material
+    if (!mat) return
+
+    if (maneuverStartMs > 0) {
+      const t = (Date.now() - maneuverStartMs) / 1000
+      if (t < MANEUVER_ANIM_SEC) {
+        // 0→0.3 ramp to red, 0.3→2.5 hold red, 2.5→3.5 fade back
+        let blend: number
+        if (t < 0.3) blend = t / 0.3
+        else if (t < 2.5) blend = 1
+        else blend = 1 - (t - 2.5) / 1.0
+        blend = Math.max(0, Math.min(1, blend))
+
+        tempColor.copy(normalColor).lerp(redColor, blend)
+        mat.color.copy(tempColor)
+        mat.linewidth = 1.4 + 1.0 * blend
+        return
+      }
+    }
+    mat.color.copy(normalColor)
+    mat.linewidth = 1.4
+  })
+
   if (points.length < 2) return null
+  const linePoints = points.map((p) => [p.x, p.y, p.z] as [number, number, number])
 
-  const linePoints = points.map((point) => [point.x, point.y, point.z] as [number, number, number])
-  const color = maneuvering ? "#ef4444" : isManual ? "#10b981" : "#7dd3fc"
-  const lineWidth = maneuvering ? 2.2 : 1.4
-
-  return <Line points={linePoints} color={color} transparent opacity={0.95} lineWidth={lineWidth} />
+  return <Line ref={lineRef} points={linePoints} color={normalColor} transparent opacity={0.95} lineWidth={1.4} />
 }
 
 const MARKER_DAMPING = 0.08
 
-function TargetMarker({ orbitTrack, isManual, maneuvering }: { orbitTrack: OrbitTrackState; isManual?: boolean; maneuvering?: boolean }) {
+function TargetMarker({ orbitTrack, isManual, maneuverStartMs }: { orbitTrack: OrbitTrackState; isManual?: boolean; maneuverStartMs: number }) {
   const meshRef = useRef<THREE.Mesh>(null)
+  const matRef = useRef<THREE.MeshBasicMaterial>(null)
   const targetPos = useRef(new THREE.Vector3())
   const initialized = useRef(false)
+  const normalColor = useMemo(() => new THREE.Color(isManual ? "#10b981" : "#22d3ee"), [isManual])
+  const redColor = useMemo(() => new THREE.Color("#ef4444"), [])
+  const tempColor = useMemo(() => new THREE.Color(), [])
 
   useFrame(() => {
     if (!meshRef.current || orbitTrack.points.length < 2) return
 
+    // --- position ---
     const stepMs = orbitTrack.stepSec * 1000
     if (!Number.isFinite(stepMs) || stepMs <= 0) {
       targetPos.current.copy(orbitTrack.points[0])
-      if (!initialized.current) {
-        meshRef.current.position.copy(targetPos.current)
-        initialized.current = true
-      } else {
-        meshRef.current.position.lerp(targetPos.current, MARKER_DAMPING)
-      }
-      return
-    }
-
-    const speed = window.__DETOUR_SPEED__ || 1
-    const elapsedMs = Math.max(0, Date.now() - orbitTrack.timeStartMs) * speed
-    const totalDurationMs = (orbitTrack.points.length - 1) * stepMs
-    const loopedMs = totalDurationMs > 0 ? elapsedMs % totalDurationMs : 0
-    const rawIndex = loopedMs / stepMs
-    const index = Math.min(Math.floor(rawIndex), orbitTrack.points.length - 2)
-    const alpha = rawIndex - index
-
-    targetPos.current.lerpVectors(
-      orbitTrack.points[index],
-      orbitTrack.points[index + 1],
-      alpha
-    )
-
-    if (!initialized.current) {
-      meshRef.current.position.copy(targetPos.current)
-      initialized.current = true
+      if (!initialized.current) { meshRef.current.position.copy(targetPos.current); initialized.current = true }
+      else meshRef.current.position.lerp(targetPos.current, MARKER_DAMPING)
     } else {
-      meshRef.current.position.lerp(targetPos.current, MARKER_DAMPING)
+      const speed = window.__DETOUR_SPEED__ || 1
+      const elapsedMs = Math.max(0, Date.now() - orbitTrack.timeStartMs) * speed
+      const totalDurationMs = (orbitTrack.points.length - 1) * stepMs
+      const loopedMs = totalDurationMs > 0 ? elapsedMs % totalDurationMs : 0
+      const rawIndex = loopedMs / stepMs
+      const index = Math.min(Math.floor(rawIndex), orbitTrack.points.length - 2)
+      const alpha = rawIndex - index
+      targetPos.current.lerpVectors(orbitTrack.points[index], orbitTrack.points[index + 1], alpha)
+
+      if (!initialized.current) { meshRef.current.position.copy(targetPos.current); initialized.current = true }
+      else meshRef.current.position.lerp(targetPos.current, MARKER_DAMPING)
     }
+
+    // --- color + scale animation ---
+    if (matRef.current && maneuverStartMs > 0) {
+      const t = (Date.now() - maneuverStartMs) / 1000
+      if (t < MANEUVER_ANIM_SEC) {
+        let blend: number
+        if (t < 0.3) blend = t / 0.3
+        else if (t < 2.5) blend = 1
+        else blend = 1 - (t - 2.5) / 1.0
+        blend = Math.max(0, Math.min(1, blend))
+
+        tempColor.copy(normalColor).lerp(redColor, blend)
+        matRef.current.color.copy(tempColor)
+        meshRef.current.scale.setScalar(1 + 0.5 * blend)
+        return
+      }
+    }
+    if (matRef.current) matRef.current.color.copy(normalColor)
+    meshRef.current.scale.setScalar(1)
   })
 
   if (orbitTrack.points.length === 0) return null
 
-  const color = maneuvering ? "#ef4444" : isManual ? "#10b981" : "#22d3ee"
-  const radius = maneuvering ? 0.018 : 0.012
-
   return (
     <mesh ref={meshRef}>
-      <sphereGeometry args={[radius, 14, 14]} />
-      <meshBasicMaterial color={color} />
+      <sphereGeometry args={[0.012, 14, 14]} />
+      <meshBasicMaterial ref={matRef} color={normalColor} />
     </mesh>
   )
 }
@@ -351,14 +387,14 @@ function Scene({
   orbitTrack,
   isManualSatellite,
   simEngine,
-  maneuvering,
+  maneuverStartMs,
 }: {
   debrisPositions: THREE.Vector3[]
   trailPoints: THREE.Vector3[]
   orbitTrack: OrbitTrackState
   isManualSatellite: boolean
   simEngine?: SimEngine | null
-  maneuvering?: boolean
+  maneuverStartMs: number
 }) {
   const { camera } = useThree()
 
@@ -376,8 +412,8 @@ function Scene({
       <Earth />
       <Graticule />
       <Atmosphere />
-      {!isRealtimeSim && <OrbitTrack points={trailPoints} isManual={isManualSatellite} maneuvering={maneuvering} />}
-      {!isRealtimeSim && <TargetMarker orbitTrack={orbitTrack} isManual={isManualSatellite} maneuvering={maneuvering} />}
+      {!isRealtimeSim && <OrbitTrack points={trailPoints} isManual={isManualSatellite} maneuverStartMs={maneuverStartMs} />}
+      {!isRealtimeSim && <TargetMarker orbitTrack={orbitTrack} isManual={isManualSatellite} maneuverStartMs={maneuverStartMs} />}
       {debrisPositions.length > 0 && !isRealtimeSim ? <StaticObjects positions={debrisPositions} /> : null}
       {simEngine && <SimulationOverlayV2 engine={simEngine} />}
       <OrbitControls enablePan enableZoom minDistance={1.5} maxDistance={20} enableDamping dampingFactor={0.05} />
@@ -391,18 +427,26 @@ interface ManualSatelliteData {
   velocities: number[][]
 }
 
+interface ManeuverEventData {
+  position: number[]
+  velocity: number[]
+  delta_v: number[]
+}
+
 interface GlobeViewProps {
   compacted?: boolean
   noradId?: number | null
   manualSatelliteData?: ManualSatelliteData | null
   simEngine?: SimEngine | null
-  maneuvering?: boolean
+  maneuverEvent?: ManeuverEventData | null
 }
 
 const SPEED_STEPS = [1, 2, 5, 10, 25, 50, 100]
 
-export function GlobeView({ compacted = false, noradId, manualSatelliteData, simEngine, maneuvering = false }: GlobeViewProps) {
+export function GlobeView({ compacted = false, noradId, manualSatelliteData, simEngine, maneuverEvent }: GlobeViewProps) {
   const [speed, setSpeed] = useState(1)
+  const [maneuverStartMs, setManeuverStartMs] = useState(0)
+  const orbitTrackRef = useRef<OrbitTrackState>({ points: [], timeStartMs: Date.now(), stepSec: 60 })
 
   const handleSpeedChange = useCallback((value: number) => {
     setSpeed(value)
@@ -595,6 +639,67 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
     }
   }, [noradId, manualSatelliteData])
 
+  // Keep a ref to current orbit so the maneuver effect can read it without
+  // depending on it (which would cause re-fires on every orbit refresh).
+  useEffect(() => { orbitTrackRef.current = orbitTrack }, [orbitTrack])
+
+  // Apply a subtle visual perturbation when the agent executes a maneuver.
+  // Instead of re-propagating from the backend state (which is in a different
+  // orbit), we shift the current displayed orbit points by a tiny amount in
+  // the delta-v direction. This keeps the orbit in the same region.
+  useEffect(() => {
+    if (!maneuverEvent) return
+
+    const dv = maneuverEvent.delta_v
+    const dvMag = Math.sqrt(dv[0] ** 2 + dv[1] ** 2 + dv[2] ** 2)
+
+    console.log("[DETOUR] Orbit perturbation from maneuver:", {
+      delta_v: dv,
+      magnitude_ms: dvMag.toFixed(4),
+      backend_position_eci_m: maneuverEvent.position,
+      backend_velocity_eci_ms: maneuverEvent.velocity,
+    })
+
+    const current = orbitTrackRef.current
+    if (dvMag === 0 || current.points.length < 2) {
+      setManeuverStartMs(Date.now())
+      const t = setTimeout(() => setManeuverStartMs(0), MANEUVER_ANIM_SEC * 1000 + 500)
+      return () => clearTimeout(t)
+    }
+
+    // Direction of the delta-v in scene space (scene ≈ ECI, Earth radius = 1)
+    const dir = new THREE.Vector3(dv[0], dv[1], dv[2]).normalize()
+
+    // Visual perturbation magnitude — enough to see but not enough to look wrong.
+    // 0.002 scene units ≈ 12.7 km, 0.008 ≈ 51 km.
+    const vizMag = Math.max(0.002, Math.min(0.008, dvMag * 0.004))
+
+    console.log("[DETOUR] Applying orbit shift:", {
+      direction: [dir.x.toFixed(4), dir.y.toFixed(4), dir.z.toFixed(4)],
+      magnitude_scene_units: vizMag.toFixed(6),
+      approx_km: (vizMag * 6371).toFixed(2),
+    })
+
+    // Shift every orbit point by the perturbation vector
+    const newPoints = current.points.map((p) => p.clone().addScaledVector(dir, vizMag))
+
+    if (newPoints.length > 0) {
+      const first = newPoints[0]
+      const last = newPoints[newPoints.length - 1]
+      console.log("[DETOUR] Post-maneuver orbit:", {
+        pointCount: newPoints.length,
+        firstPoint: [first.x.toFixed(4), first.y.toFixed(4), first.z.toFixed(4)],
+        lastPoint: [last.x.toFixed(4), last.y.toFixed(4), last.z.toFixed(4)],
+      })
+    }
+
+    setOrbitTrack((prev) => ({ ...prev, points: newPoints }))
+    setManeuverStartMs(Date.now())
+
+    const t = setTimeout(() => setManeuverStartMs(0), MANEUVER_ANIM_SEC * 1000 + 500)
+    return () => clearTimeout(t)
+  }, [maneuverEvent]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const currentIndex = useMemo(() => {
     if (orbitTrack.points.length === 0) return 0
 
@@ -634,8 +739,8 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
       <Canvas
         camera={{ fov: 45, near: 0.1, far: 1000, position: [0, 0, 4] }}
         gl={{ antialias: true, alpha: false }}
-        resize={{ debounce: 0 }}
-        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", background: "#030303" }}
+        resize={{ offsetSize: true }}
+        style={{ position: "absolute", inset: 0, background: "#030303" }}
       >
         <Scene
           debrisPositions={debrisPositions}
@@ -643,7 +748,7 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData, sim
           orbitTrack={orbitTrack}
           isManualSatellite={noradId === -1}
           simEngine={simEngine}
-          maneuvering={maneuvering}
+          maneuverStartMs={maneuverStartMs}
         />
       </Canvas>
 

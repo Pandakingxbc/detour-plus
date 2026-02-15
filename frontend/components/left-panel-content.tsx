@@ -1,6 +1,6 @@
 "use client"
 
-import { FormEvent, useCallback, useEffect, useState } from "react"
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react"
 import { Loader2, RefreshCw, Search } from "lucide-react"
 
 const DEFAULT_NORAD = "25544"
@@ -170,10 +170,16 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskCha
     [loadFeed, onPrimaryIdChange]
   )
 
+  // Keep a ref so the mount effect always calls the latest loadTarget
+  // without depending on its identity (avoids re-fires from callback churn).
+  const loadTargetRef = useRef(loadTarget)
+  loadTargetRef.current = loadTarget
+
   useEffect(() => {
     const defaultId = Number(DEFAULT_NORAD)
-    void loadTarget(defaultId)
-  }, [loadTarget])
+    void loadTargetRef.current(defaultId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Load feed when activeNorad changes (including manual satellite)
   useEffect(() => {

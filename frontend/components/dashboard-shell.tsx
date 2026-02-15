@@ -34,7 +34,7 @@ export function DashboardShell() {
   const [headerRisk, setHeaderRisk] = useState<RiskLevel>("LOW")
   const [appliedConstraints, setAppliedConstraints] = useState<PlannerConstraints>(DEFAULT_CONSTRAINTS)
   const [manualSatelliteData, setManualSatelliteData] = useState<ManualSatelliteData | null>(null)
-  const [maneuvering, setManeuvering] = useState(false)
+  const [maneuverEvent, setManeuverEvent] = useState<{ position: number[]; velocity: number[]; delta_v: number[] } | null>(null)
 
   // Auto-trigger state
   const [feedEvents, setFeedEvents] = useState<FeedEvent[]>([])
@@ -95,77 +95,17 @@ export function DashboardShell() {
     setActivePrimaryId(-1)
   }
 
-  const handleAgentManeuverExecuted = useCallback(async (data: { position: number[]; velocity: number[]; delta_v: number[] }) => {
-    try {
-      setManeuvering(true)
-
-      // Try to get the current manual satellite state so we apply the
-      // delta-v to the orbit already shown on the globe, rather than
-      // jumping to the Python backend's default satellite position.
-      let pos = data.position
-      let vel = data.velocity
-      let dvMag = 0
-      let direction: "prograde" | "retrograde" | "radial-out" | "radial-in" = "prograde"
-
-      try {
-        const stateRes = await fetch("/api/manual-satellite-state")
-        if (stateRes.ok) {
-          const cur = await stateRes.json() as { position: number[]; velocity: number[] }
-          if (cur.position?.length === 3 && cur.velocity?.length === 3) {
-            // Use current frontend state and apply the agent's delta-v as a maneuver
-            pos = cur.position
-            vel = cur.velocity
-            dvMag = Math.sqrt(data.delta_v[0] ** 2 + data.delta_v[1] ** 2 + data.delta_v[2] ** 2)
-            // Determine best-fit direction from the delta-v vector
-            if (dvMag > 0) {
-              const r = Math.sqrt(pos[0] ** 2 + pos[1] ** 2 + pos[2] ** 2)
-              const rHat = pos.map((c) => c / r)
-              // Radial component = dot(delta_v, rHat)
-              const radialComp = data.delta_v[0] * rHat[0] + data.delta_v[1] * rHat[1] + data.delta_v[2] * rHat[2]
-              const tangentComp = dvMag - Math.abs(radialComp)
-              if (Math.abs(radialComp) > tangentComp) {
-                direction = radialComp > 0 ? "radial-out" : "radial-in"
-              } else {
-                // Check prograde vs retrograde by dotting with velocity direction
-                const vNorm = Math.sqrt(vel[0] ** 2 + vel[1] ** 2 + vel[2] ** 2)
-                const vHat = vel.map((c) => c / vNorm)
-                const progComp = data.delta_v[0] * vHat[0] + data.delta_v[1] * vHat[1] + data.delta_v[2] * vHat[2]
-                direction = progComp >= 0 ? "prograde" : "retrograde"
-              }
-            }
-          }
-        }
-      } catch {
-        // No existing manual satellite — fall back to backend state with no extra dv
-      }
-
-      const res = await fetch("/api/manual/maneuver-from-state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ position: pos, velocity: vel, direction, delta_v_magnitude: dvMag }),
-      })
-      if (!res.ok) return
-      const result = await res.json()
-
-      // Persist to server state (same as manual maneuver buttons)
-      await fetch("/api/manual-satellite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          position: result.initial_state.position,
-          velocity: result.initial_state.velocity,
-          epoch: result.initial_state.epoch,
-          trajectory: result.trajectory,
-        }),
-      })
-
-      // Update globe visualization
-      setManualSatelliteData(result.trajectory)
-      setActivePrimaryId(-1)
-    } catch { /* non-critical */ } finally {
-      // Flash red for 3 seconds then revert
-      setTimeout(() => setManeuvering(false), 3000)
-    }
+  const handleAgentManeuverExecuted = useCallback((data: { position: number[]; velocity: number[]; delta_v: number[] }) => {
+    const dvMag = Math.sqrt(data.delta_v[0] ** 2 + data.delta_v[1] ** 2 + data.delta_v[2] ** 2)
+    console.log("[DETOUR] Agent maneuver executed:", {
+      position_eci_m: data.position,
+      velocity_eci_ms: data.velocity,
+      delta_v_ms: data.delta_v,
+      delta_v_magnitude_ms: dvMag.toFixed(4),
+    })
+    // Pass to GlobeView — it applies a visual perturbation to the current orbit
+    setManeuverEvent({ ...data })
+    setTimeout(() => setManeuverEvent(null), 4000)
   }, [])
 
   const handleRunScenario = useCallback(async () => {
@@ -264,7 +204,7 @@ export function DashboardShell() {
         noradId={activePrimaryId}
         manualSatelliteData={manualSatelliteData}
         simEngine={simActive ? simEngine : null}
-        maneuvering={maneuvering}
+        maneuverEvent={maneuverEvent}
       />
 
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 p-6">
