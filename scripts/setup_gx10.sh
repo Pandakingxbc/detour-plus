@@ -53,6 +53,26 @@ else
         || echo "  ⚠ Could not clear cache (not root)."
 fi
 
+# ── Ensure CUDA libraries are on LD_LIBRARY_PATH ─────────────────────────
+# vLLM needs libcudart.so.12 etc. which live outside Python site-packages
+CUDA_SEARCH_PATHS=(
+    /usr/local/cuda/lib64
+    /usr/local/cuda-12/lib64
+    /usr/lib/aarch64-linux-gnu
+    /usr/lib/x86_64-linux-gnu
+)
+for p in "${CUDA_SEARCH_PATHS[@]}"; do
+    if [[ -d "$p" ]] && ls "$p"/libcudart.so* &>/dev/null; then
+        export LD_LIBRARY_PATH="${p}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        echo "  CUDA libs found: ${p}"
+        break
+    fi
+done
+# Also add the nvidia stubs/lib dirs if they exist
+for p in /usr/local/cuda/lib64/stubs /usr/lib/aarch64-linux-gnu/nvidia; do
+    [[ -d "$p" ]] && export LD_LIBRARY_PATH="${p}:${LD_LIBRARY_PATH}"
+done
+
 # ── Step 3: Set up venv + install vLLM ───────────────────────────────────
 echo ""
 echo "[3/4] Preparing vLLM..."
