@@ -56,12 +56,16 @@ if ! command -v docker &>/dev/null; then
 fi
 docker --version
 echo "  Checking NVIDIA Container Toolkit..."
-if ! docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi &>/dev/null 2>&1; then
-    echo "  ⚠ NVIDIA Container Toolkit not working. Install:"
+if command -v nvidia-ctk &>/dev/null; then
+    nvidia-ctk --version
+    echo "  NVIDIA Container Toolkit ✓"
+elif dpkg -l nvidia-container-toolkit &>/dev/null 2>&1; then
+    echo "  nvidia-container-toolkit installed (via apt) ✓"
+else
+    echo "  ⚠ NVIDIA Container Toolkit not found. Install:"
     echo "    https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html"
     exit 1
 fi
-echo "  NVIDIA Container Toolkit ✓"
 
 # ── Step 3: Pull NGC vLLM container ──────────────────────────────────────
 echo ""
