@@ -103,7 +103,7 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
         return
       }
 
-      const response = await fetch("http://localhost:8000/api/objects/manual/trajectory", {
+      const response = await fetch("/api/manual/trajectory", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -116,13 +116,14 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+        const errorBody = (await response.json().catch(() => null)) as { detail?: string } | null
+        throw new Error(errorBody?.detail ?? `HTTP ${response.status}`)
       }
 
       const data = await response.json()
 
       // Store state vectors + trajectory in server state for conjunction detection
-      await fetch("/api/manual-satellite", {
+      const persistResponse = await fetch("/api/manual-satellite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -132,12 +133,16 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
           trajectory: data.trajectory,
         }),
       })
+      if (!persistResponse.ok) {
+        const errorBody = (await persistResponse.json().catch(() => null)) as { detail?: string } | null
+        throw new Error(errorBody?.detail ?? "Failed to persist manual satellite state")
+      }
 
       onManualSatelliteLoad?.(data.trajectory)
       setManualFeedback("Manual satellite loaded!")
       setManualSatelliteActive(true)
     } catch (error) {
-      setManualFeedback("Failed to load manual satellite")
+      setManualFeedback(error instanceof Error ? error.message : "Failed to load manual satellite")
       console.error(error)
     } finally {
       setManualLoading(false)
@@ -157,7 +162,7 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
       const currentState = await stateResponse.json()
 
       // Apply maneuver with current state
-      const response = await fetch("http://localhost:8000/api/objects/manual/maneuver-from-state", {
+      const response = await fetch("/api/manual/maneuver-from-state", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -169,13 +174,14 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+        const errorBody = (await response.json().catch(() => null)) as { detail?: string } | null
+        throw new Error(errorBody?.detail ?? `HTTP ${response.status}`)
       }
 
       const data = await response.json()
 
       // Update server state with new trajectory
-      await fetch("/api/manual-satellite", {
+      const persistResponse = await fetch("/api/manual-satellite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -185,12 +191,16 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
           trajectory: data.trajectory,
         }),
       })
+      if (!persistResponse.ok) {
+        const errorBody = (await persistResponse.json().catch(() => null)) as { detail?: string } | null
+        throw new Error(errorBody?.detail ?? "Failed to persist manual satellite state")
+      }
 
       // Update visualization
       onManualSatelliteLoad?.(data.trajectory)
       setManualFeedback(`Maneuver applied: ${direction}`)
     } catch (error) {
-      setManualFeedback("Maneuver failed")
+      setManualFeedback(error instanceof Error ? error.message : "Maneuver failed")
       console.error(error)
     } finally {
       setManeuvering(false)
