@@ -2,23 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
-import { Line, OrbitControls, Stars } from "@react-three/drei"
+import { OrbitControls, Stars } from "@react-three/drei"
 import * as THREE from "three"
 
-import { geodeticToUnitVector } from "@/lib/geo"
 import { cn } from "@/lib/utils"
+import { MovingSatellite } from "@/components/moving-satellite"
 
 const EARTH_RADIUS_M = 6_378_137
 const SCALE = 1 / EARTH_RADIUS_M
-const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
-const DISPLAY_OBJECT_LIMIT = 1800
 
 interface ApiOrbitalObject {
-  position?: [number, number, number]
-  lat?: number
-  lon?: number
-  alt_km?: number
-  epoch?: string
+  position: [number, number, number]
+}
+
+interface TrajectoryData {
+  times: number[]
+  positions: number[][]
+  velocities: number[][]
 }
 
 interface MockOrbit {
@@ -31,129 +31,68 @@ interface MockOrbit {
 }
 
 function Earth() {
-  const { gl } = useThree()
-  const [surfaceMap, setSurfaceMap] = useState<THREE.Texture | null>(null)
-
-  useEffect(() => {
-    let active = true
-    const loader = new THREE.TextureLoader()
-
-    loader.load(
-      TEXTURE_PATH,
-      (texture) => {
-        if (!active) {
-          texture.dispose()
-          return
-        }
-
-        texture.colorSpace = THREE.SRGBColorSpace
-        texture.anisotropy = Math.min(8, gl.capabilities.getMaxAnisotropy())
-        texture.minFilter = THREE.LinearMipmapLinearFilter
-        texture.magFilter = THREE.LinearFilter
-        texture.needsUpdate = true
-
-        setSurfaceMap((previous) => {
-          previous?.dispose()
-          return texture
-        })
-      },
-      undefined,
-      () => {
-        // If the local texture is not present yet, keep the fallback material.
-      }
-    )
-
-    return () => {
-      active = false
-    }
-  }, [gl])
-
-  useEffect(() => {
-    return () => {
-      surfaceMap?.dispose()
-    }
-  }, [surfaceMap])
+  const meshRef = useRef<THREE.Mesh>(null)
 
   const material = useMemo(() => {
-    return new THREE.MeshBasicMaterial({
-      map: surfaceMap ?? undefined,
-      color: surfaceMap ? "#ffffff" : "#173b5f",
-      toneMapped: false,
-    })
-  }, [surfaceMap])
-
-  useEffect(() => {
-    return () => {
-      material.dispose()
+    const canvas = document.createElement("canvas")
+    canvas.width = 1024
+    canvas.height = 512
+    const ctx = canvas.getContext("2d")
+    if (!ctx) {
+      return new THREE.MeshPhongMaterial({ color: "#2a4f72" })
     }
-  }, [material])
+
+    ctx.fillStyle = "#173b5f"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    ctx.fillStyle = "#375f38"
+    ctx.beginPath()
+    ctx.ellipse(250, 160, 80, 60, -0.3, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.beginPath()
+    ctx.ellipse(310, 310, 42, 72, 0.2, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.beginPath()
+    ctx.ellipse(520, 200, 52, 82, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.beginPath()
+    ctx.ellipse(680, 160, 100, 62, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.beginPath()
+    ctx.ellipse(780, 340, 36, 26, 0, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.strokeStyle = "rgba(150, 190, 220, 0.14)"
+    ctx.lineWidth = 0.5
+    for (let i = 0; i < 36; i += 1) {
+      ctx.beginPath()
+      ctx.moveTo((i / 36) * canvas.width, 0)
+      ctx.lineTo((i / 36) * canvas.width, canvas.height)
+      ctx.stroke()
+    }
+    for (let i = 0; i < 18; i += 1) {
+      ctx.beginPath()
+      ctx.moveTo(0, (i / 18) * canvas.height)
+      ctx.lineTo(canvas.width, (i / 18) * canvas.height)
+      ctx.stroke()
+    }
+
+    const texture = new THREE.CanvasTexture(canvas)
+    return new THREE.MeshPhongMaterial({
+      map: texture,
+      specular: new THREE.Color(0x2f2f2f),
+      shininess: 14,
+    })
+  }, [])
+
+  useFrame(() => {
+    if (meshRef.current) meshRef.current.rotation.y += 0.0002 // Much faster for testing (50x speed)
+  })
 
   return (
-    <mesh material={material}>
+    <mesh ref={meshRef} material={material}>
       <sphereGeometry args={[1, 64, 64]} />
     </mesh>
-  )
-}
-
-function Graticule() {
-  const latLines = useMemo(() => {
-    const latitudes = [-60, -30, 0, 30, 60]
-    return latitudes.map((lat) => {
-      const points: [number, number, number][] = []
-      for (let lon = -180; lon <= 180; lon += 2) {
-        const p = geodeticToUnitVector(lat, lon, 0)
-        points.push([p.x * 1.002, p.y * 1.002, p.z * 1.002])
-      }
-      return points
-    })
-  }, [])
-
-  const lonLines = useMemo(() => {
-    const longitudes = [-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150]
-    return longitudes.map((lon) => {
-      const points: [number, number, number][] = []
-      for (let lat = -90; lat <= 90; lat += 2) {
-        const p = geodeticToUnitVector(lat, lon, 0)
-        points.push([p.x * 1.002, p.y * 1.002, p.z * 1.002])
-      }
-      return points
-    })
-  }, [])
-
-  return (
-    <group>
-      {latLines.map((points, index) => (
-        <Line key={`lat-${index}`} points={points} color="#ffffff" transparent opacity={0.28} lineWidth={0.6} />
-      ))}
-      {lonLines.map((points, index) => (
-        <Line key={`lon-${index}`} points={points} color="#ffffff" transparent opacity={0.25} lineWidth={0.6} />
-      ))}
-    </group>
-  )
-}
-
-function ReferenceMarkers() {
-  const markerCoords = useMemo(
-    () => [
-      { name: "Gulf of Guinea (0,0)", lat: 0, lon: 0 },
-      { name: "Greenwich", lat: 51.4779, lon: -0.0015 },
-      { name: "Tokyo", lat: 35.6764, lon: 139.65 },
-    ],
-    []
-  )
-
-  return (
-    <group>
-      {markerCoords.map((marker) => {
-        const p = geodeticToUnitVector(marker.lat, marker.lon, 0)
-        return (
-          <mesh key={marker.name} position={[p.x * 1.004, p.y * 1.004, p.z * 1.004]}>
-            <sphereGeometry args={[0.01, 10, 10]} />
-            <meshBasicMaterial color="#ffffff" transparent opacity={0.9} />
-          </mesh>
-        )
-      })}
-    </group>
   )
 }
 
@@ -161,16 +100,12 @@ function Atmosphere() {
   return (
     <mesh>
       <sphereGeometry args={[1.015, 64, 64]} />
-      <meshBasicMaterial color="#73a5ff" transparent opacity={0.1} side={THREE.BackSide} />
+      <meshPhongMaterial color="#73a5ff" transparent opacity={0.08} side={THREE.BackSide} />
     </mesh>
   )
 }
 
-function StaticObjects({
-  positions,
-}: {
-  positions: THREE.Vector3[]
-}) {
+function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
 
@@ -180,7 +115,7 @@ function StaticObjects({
 
     positions.forEach((position, index) => {
       dummy.position.copy(position)
-      dummy.scale.setScalar(0.0063)
+      dummy.scale.setScalar(0.0045)
       dummy.updateMatrix()
       mesh.setMatrixAt(index, dummy.matrix)
     })
@@ -192,16 +127,12 @@ function StaticObjects({
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, positions.length]}>
       <sphereGeometry args={[1, 6, 6]} />
-      <meshBasicMaterial color="#f59e0b" transparent opacity={0.9} />
+      <meshBasicMaterial color="#87bfff" transparent opacity={0.86} />
     </instancedMesh>
   )
 }
 
-function MockObjects({
-  count = 1400,
-}: {
-  count?: number
-}) {
+function MockObjects({ count = 2400 }: { count?: number }) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
 
@@ -222,10 +153,12 @@ function MockObjects({
 
     const t = clock.elapsedTime
     orbits.forEach((orbit, index) => {
+      // Orbital-plane angle.
       const u = orbit.phaseAtEpoch + orbit.argumentOfPerigee + t * orbit.speed
       const xOrb = orbit.radius * Math.cos(u)
       const yOrb = orbit.radius * Math.sin(u)
 
+      // Rotate from orbital plane into ECI-like frame by inclination + RAAN.
       const cosI = Math.cos(orbit.inclination)
       const sinI = Math.sin(orbit.inclination)
       const cosO = Math.cos(orbit.ascendingNode)
@@ -236,7 +169,7 @@ function MockObjects({
       const z = yOrb * sinI
 
       dummy.position.set(x, y, z)
-      dummy.scale.setScalar(0.006)
+      dummy.scale.setScalar(0.0043)
       dummy.updateMatrix()
       mesh.setMatrixAt(index, dummy.matrix)
     })
@@ -246,16 +179,12 @@ function MockObjects({
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, orbits.length]}>
       <sphereGeometry args={[1, 6, 6]} />
-      <meshBasicMaterial color="#f59e0b" transparent opacity={0.9} />
+      <meshBasicMaterial color="#87bfff" transparent opacity={0.85} />
     </instancedMesh>
   )
 }
 
-function Scene({
-  positions,
-}: {
-  positions: THREE.Vector3[]
-}) {
+function Scene({ positions, trajectory }: { positions: THREE.Vector3[], trajectory: TrajectoryData | null }) {
   const { camera } = useThree()
 
   useEffect(() => {
@@ -264,14 +193,15 @@ function Scene({
 
   return (
     <>
-      <Stars radius={110} depth={70} count={2600} factor={13.8} saturation={0} fade speed={0.15} />
-      <Stars radius={112} depth={75} count={1400} factor={20.4} saturation={0} fade speed={0.18} />
-      <Stars radius={115} depth={80} count={650} factor={25.8} saturation={0} fade speed={0.12} />
+      <ambientLight intensity={0.35} />
+      <directionalLight position={[5, 3, 5]} intensity={1.2} />
+      <Stars radius={100} depth={60} count={4200} factor={3.6} saturation={0} />
       <Earth />
-      <Graticule />
-      <ReferenceMarkers />
       <Atmosphere />
-      {positions.length > 0 ? <StaticObjects positions={positions} /> : <MockObjects />}
+      {/* Show moving mock debris for visual effect */}
+      <MockObjects count={1200} />
+      {/* Show the special tracked satellite in red */}
+      <MovingSatellite trajectory={trajectory} color="#ff3333" size={0.025} speed={100} />
       <OrbitControls
         enablePan
         enableZoom
@@ -284,36 +214,12 @@ function Scene({
   )
 }
 
-function toScaledVector(position: [number, number, number] | undefined): THREE.Vector3 | null {
-  if (!position) return null
+function toScaledVector(position: [number, number, number]): THREE.Vector3 | null {
   const [x, y, z] = position
   if (![x, y, z].every(Number.isFinite)) return null
   const magnitude = Math.sqrt(x * x + y * y + z * z)
   if (magnitude < EARTH_RADIUS_M * 0.9 || magnitude > EARTH_RADIUS_M * 10) return null
   return new THREE.Vector3(x * SCALE, y * SCALE, z * SCALE)
-}
-
-function toGeodeticVector(entry: ApiOrbitalObject): THREE.Vector3 | null {
-  const lat = entry.lat
-  const lon = entry.lon
-  const altKm = entry.alt_km ?? 0
-
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(altKm)) return null
-
-  const latValue = lat as number
-  const lonValue = lon as number
-  if (Math.abs(latValue) > 90 || Math.abs(lonValue) > 360) return null
-
-  const cartesian = geodeticToUnitVector(latValue, lonValue, altKm)
-  const magnitude = Math.sqrt(
-    cartesian.x * cartesian.x +
-    cartesian.y * cartesian.y +
-    cartesian.z * cartesian.z
-  )
-
-  if (magnitude < 0.9 || magnitude > 10) return null
-
-  return new THREE.Vector3(cartesian.x, cartesian.y, cartesian.z)
 }
 
 interface GlobeViewProps {
@@ -322,50 +228,85 @@ interface GlobeViewProps {
 
 export function GlobeView({ compacted = false }: GlobeViewProps) {
   const [positions, setPositions] = useState<THREE.Vector3[]>([])
+  const [mode, setMode] = useState<"live" | "mock">("mock")
+  const [trajectory, setTrajectory] = useState<TrajectoryData | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000/api"
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000"
 
     const load = async () => {
       try {
-        const response = await fetch(`${apiBase}/objects?limit=2600`, { signal: controller.signal })
+        const response = await fetch(`${apiBase}/api/objects?limit=3500`, { signal: controller.signal })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const objects = (await response.json()) as ApiOrbitalObject[]
         const scaled = objects
-          .map((entry) => toGeodeticVector(entry) ?? toScaledVector(entry.position))
+          .map((entry) => toScaledVector(entry.position))
           .filter((value): value is THREE.Vector3 => value !== null)
-          .slice(0, DISPLAY_OBJECT_LIMIT)
 
         if (scaled.length > 0) {
           setPositions(scaled)
+          setMode("live")
           return
         }
-      } catch {
-        // Keep rendering mock objects when backend data is unavailable.
+        setMode("mock")
+      } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === "AbortError") return
+        setMode("mock")
+      }
+    }
+
+    const loadTrajectory = async () => {
+      try {
+        console.log("🚀 Fetching satellite trajectory...")
+        // Request 3 full orbits (~270 minutes) with 20 second intervals
+        const response = await fetch(`${apiBase}/api/satellite-demo/iss-trajectory?duration=16200&dt=20`, {
+          signal: controller.signal,
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const data = (await response.json()) as TrajectoryData
+        console.log("✅ Trajectory loaded successfully:", {
+          points: data.positions.length,
+          duration: data.times[data.times.length - 1],
+          orbits: "~3 full orbits"
+        })
+        setTrajectory(data)
+      } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === "AbortError") return
+        console.error("❌ Failed to load trajectory:", err)
       }
     }
 
     void load()
+    void loadTrajectory()
     return () => controller.abort()
   }, [])
 
   return (
     <div
       className={cn(
-        "absolute inset-0 h-full w-full origin-center overflow-hidden transition-transform duration-500 ease-in-out",
-        compacted ? "-translate-y-16 scale-[0.7]" : "translate-y-0 scale-100"
+        "absolute inset-0 origin-center transition-transform duration-500 ease-in-out",
+        compacted ? "-translate-y-10 scale-95" : "translate-y-0 scale-100"
       )}
     >
       <Canvas
-        className="h-full w-full"
         camera={{ fov: 45, near: 0.1, far: 1000, position: [0, 0, 4] }}
         gl={{ antialias: true, alpha: false }}
-        style={{ background: "#030303", width: "100%", height: "100%" }}
+        style={{ background: "#030303" }}
       >
-        <Scene positions={positions} />
+        <Scene positions={positions} trajectory={trajectory} />
       </Canvas>
+      <div
+        className={cn(
+          "pointer-events-none absolute left-3 rounded-md bg-black/55 px-2 py-1 text-xs text-gray-400 transition-[bottom] duration-500 ease-in-out",
+          compacted ? "bottom-64" : "bottom-3"
+        )}
+      >
+        Orbit objects: {mode === "live" ? "Live backend feed" : "Mock mode fallback"}
+      </div>
     </div>
   )
 }

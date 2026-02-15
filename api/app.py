@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import state
-from api.routes import objects, conjunctions, maneuvers, catalog
+from api.routes import objects, conjunctions, maneuvers, catalog, satellite_demo
 from api.routes import agent as agent_routes
 
 # Load .env from project root
@@ -74,6 +74,7 @@ app.include_router(conjunctions.router)
 app.include_router(maneuvers.router)
 app.include_router(catalog.router)
 app.include_router(agent_routes.router)
+app.include_router(satellite_demo.router)
 
 
 @app.get("/api/health")
