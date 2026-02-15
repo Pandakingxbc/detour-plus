@@ -254,7 +254,6 @@ function Scene({
 }
 
 interface ManualSatelliteData {
-  norad_id: number
   times: number[]
   positions: number[][]
   velocities: number[][]

@@ -89,22 +89,27 @@ async def get_trajectory(
     )
 
 
-@router.post("/manual/trajectory", response_model=TrajectoryResponse)
+@router.post("/manual/trajectory")
 async def get_manual_trajectory(request: ManualSatelliteRequest):
     """
     Generate a perfect circular orbit at the given radius.
-    Speed parameter controls the orbital period.
+    Returns initial state vectors + trajectory for visualization.
     """
     import numpy as np
     import math
 
     radius_m = request.radius_km * 1000.0
 
+    # Initial state: position on x-axis, velocity on y-axis (circular equatorial orbit)
+    initial_position = [radius_m, 0.0, 0.0]
+    initial_velocity = [0.0, request.speed_mps, 0.0]
+    epoch = datetime.now(timezone.utc)
+
     # Calculate orbital period from speed: T = 2πr/v
     circumference = 2 * math.pi * radius_m
     period_sec = circumference / request.speed_mps if request.speed_mps > 0 else 5400.0
 
-    # Generate points for 2 complete orbits
+    # Generate points for 2 complete orbits (for visualization)
     num_orbits = 2
     total_time = period_sec * num_orbits
     num_points = int(total_time / request.dt)
@@ -131,9 +136,16 @@ async def get_manual_trajectory(request: ManualSatelliteRequest):
         positions.append([x, y, z])
         velocities.append([vx, vy, vz])
 
-    return TrajectoryResponse(
-        norad_id=-1,
-        times=times,
-        positions=positions,
-        velocities=velocities,
-    )
+    return {
+        "norad_id": -1,
+        "initial_state": {
+            "position": initial_position,
+            "velocity": initial_velocity,
+            "epoch": epoch.isoformat(),
+        },
+        "trajectory": {
+            "times": times,
+            "positions": positions,
+            "velocities": velocities,
+        },
+    }

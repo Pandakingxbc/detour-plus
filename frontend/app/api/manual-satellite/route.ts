@@ -7,15 +7,17 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
 
-    if (!body.times || !body.positions || !body.velocities) {
-      return NextResponse.json({ error: "Missing trajectory data" }, { status: 400 })
+    if (!body.position || !body.velocity || !body.epoch || !body.trajectory) {
+      return NextResponse.json({ error: "Missing state vector or trajectory data" }, { status: 400 })
     }
 
+    const epochDate = new Date(body.epoch)
     setManualSatellite({
-      times: body.times,
-      positions: body.positions,
-      velocities: body.velocities,
-      loadedAtMs: Date.now(),
+      position: body.position,
+      velocity: body.velocity,
+      epoch: body.epoch,
+      epochMs: epochDate.getTime(),
+      trajectory: body.trajectory,
     })
 
     return NextResponse.json({ ok: true })

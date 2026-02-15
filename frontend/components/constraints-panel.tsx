@@ -108,18 +108,19 @@ export function ConstraintsPanel({ appliedConstraints, onApply, onManualSatellit
 
       const data = await response.json()
 
-      // Store trajectory in server state for conjunction detection
+      // Store state vectors + trajectory in server state for conjunction detection
       await fetch("/api/manual-satellite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          times: data.times,
-          positions: data.positions,
-          velocities: data.velocities,
+          position: data.initial_state.position,
+          velocity: data.initial_state.velocity,
+          epoch: data.initial_state.epoch,
+          trajectory: data.trajectory,
         }),
       })
 
-      onManualSatelliteLoad?.(data)
+      onManualSatelliteLoad?.(data.trajectory)
       setManualFeedback("Manual satellite loaded!")
     } catch (error) {
       setManualFeedback("Failed to load manual satellite")
