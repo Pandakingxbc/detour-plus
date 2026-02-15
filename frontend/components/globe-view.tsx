@@ -1,12 +1,14 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Canvas, useThree } from "@react-three/fiber"
+import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { Line, OrbitControls, Stars } from "@react-three/drei"
 import * as THREE from "three"
 
 import { geodeticToUnitVector } from "@/lib/geo"
 import { cn } from "@/lib/utils"
+import { SimulationOverlayV2 } from "@/components/simulation-overlay-v2"
+import type { SimEngine } from "@/lib/sim-engine"
 
 const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
 const DISPLAY_OBJECT_LIMIT = 2500
@@ -171,10 +173,40 @@ function Atmosphere() {
   )
 }
 
-function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
+function StaticObjects({
+  positions,
+  simTimeRef,
+}: {
+  positions: THREE.Vector3[]
+  simTimeRef?: React.RefObject<number>
+}) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
+  const wasSimulating = useRef(false)
 
+  // Precompute per-debris drift: slow linear drift + oscillation
+  const driftData = useMemo(() => {
+    return positions.map((_pos, i) => {
+      const phi = i * 2.39996322  // golden angle
+      const theta = ((i * 1.61803) % 1.0) * Math.PI
+      // Linear drift speed — visible in short demo
+      const speed = 0.00004 + (i % 60) * 0.0000008
+      // Oscillation — large enough to see wobble
+      const oscAmp = 0.008 + (i % 40) * 0.0003
+      const oscFreq = 0.005 + (i % 50) * 0.00006
+      return {
+        dx: Math.cos(phi) * Math.sin(theta) * speed,
+        dy: Math.cos(theta) * speed * 0.4,
+        dz: Math.sin(phi) * Math.sin(theta) * speed,
+        ox: Math.cos(phi + 1.0) * oscAmp,
+        oy: Math.sin(theta + 1.0) * oscAmp * 0.4,
+        oz: Math.sin(phi + 2.0) * oscAmp,
+        freq: oscFreq,
+      }
+    })
+  }, [positions])
+
+  // Set initial positions
   useEffect(() => {
     const mesh = meshRef.current
     if (!mesh || positions.length === 0) return
@@ -187,6 +219,46 @@ function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
     })
     mesh.instanceMatrix.needsUpdate = true
   }, [dummy, positions])
+
+  // Per-frame drift during simulation
+  useFrame(() => {
+    const mesh = meshRef.current
+    if (!mesh || positions.length === 0) return
+
+    const isSimulating = !!simTimeRef
+
+    // Reset positions when simulation ends
+    if (!isSimulating && wasSimulating.current) {
+      for (let i = 0; i < positions.length; i++) {
+        dummy.position.copy(positions[i])
+        dummy.scale.setScalar(0.0063)
+        dummy.updateMatrix()
+        mesh.setMatrixAt(i, dummy.matrix)
+      }
+      mesh.instanceMatrix.needsUpdate = true
+      wasSimulating.current = false
+      return
+    }
+
+    if (!isSimulating) return
+    wasSimulating.current = true
+
+    const t = simTimeRef.current
+    for (let i = 0; i < positions.length; i++) {
+      const pos = positions[i]
+      const d = driftData[i]
+      const osc = Math.sin(d.freq * t)
+      dummy.position.set(
+        pos.x + d.dx * t + d.ox * osc,
+        pos.y + d.dy * t + d.oy * osc,
+        pos.z + d.dz * t + d.oz * osc
+      )
+      dummy.scale.setScalar(0.0063)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = true
+  })
 
   if (positions.length === 0) return null
 
@@ -225,17 +297,21 @@ function Scene({
   orbitPoints,
   currentTargetPoint,
   isManualSatellite,
+  simEngine,
 }: {
   debrisPositions: THREE.Vector3[]
   orbitPoints: THREE.Vector3[]
   currentTargetPoint: THREE.Vector3 | null
   isManualSatellite: boolean
+  simEngine?: SimEngine | null
 }) {
   const { camera } = useThree()
 
   useEffect(() => {
     camera.position.set(0, 0, 4)
   }, [camera])
+
+  const isRealtimeSim = !!simEngine
 
   return (
     <>
@@ -245,9 +321,10 @@ function Scene({
       <Earth />
       <Graticule />
       <Atmosphere />
-      <OrbitTrack points={orbitPoints} isManual={isManualSatellite} />
-      <TargetMarker point={currentTargetPoint} isManual={isManualSatellite} />
-      {debrisPositions.length > 0 ? <StaticObjects positions={debrisPositions} /> : null}
+      {!isRealtimeSim && <OrbitTrack points={orbitPoints} isManual={isManualSatellite} />}
+      {!isRealtimeSim && <TargetMarker point={currentTargetPoint} isManual={isManualSatellite} />}
+      {debrisPositions.length > 0 && !isRealtimeSim ? <StaticObjects positions={debrisPositions} /> : null}
+      {simEngine && <SimulationOverlayV2 engine={simEngine} />}
       <OrbitControls enablePan enableZoom minDistance={1.5} maxDistance={20} enableDamping dampingFactor={0.05} />
     </>
   )
@@ -263,9 +340,10 @@ interface GlobeViewProps {
   compacted?: boolean
   noradId?: number | null
   manualSatelliteData?: ManualSatelliteData | null
+  simEngine?: SimEngine | null
 }
 
-export function GlobeView({ compacted = false, noradId, manualSatelliteData }: GlobeViewProps) {
+export function GlobeView({ compacted = false, noradId, manualSatelliteData, simEngine }: GlobeViewProps) {
   const [debrisPositions, setDebrisPositions] = useState<THREE.Vector3[]>([])
   const [orbitTrack, setOrbitTrack] = useState<OrbitTrackState>({
     points: [],
@@ -282,7 +360,10 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData }: G
     return () => window.clearInterval(interval)
   }, [])
 
+  // Debris loading — paused during simulation to avoid fighting with drift
   useEffect(() => {
+    if (simEngine) return // Freeze debris positions during simulation
+
     const controller = new AbortController()
     let cancelled = false
     let inFlight = false
@@ -323,7 +404,7 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData }: G
       controller.abort()
       window.clearInterval(interval)
     }
-  }, [])
+  }, [simEngine])
 
   useEffect(() => {
     if (!noradId) {
@@ -454,6 +535,7 @@ export function GlobeView({ compacted = false, noradId, manualSatelliteData }: G
           orbitPoints={orbitTrack.points}
           currentTargetPoint={currentTargetPoint}
           isManualSatellite={noradId === -1}
+          simEngine={simEngine}
         />
       </Canvas>
     </div>

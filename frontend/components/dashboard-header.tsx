@@ -2,6 +2,7 @@
 
 import Image from "next/image"
 import { useEffect, useState } from "react"
+import { Crosshair, Loader2, X } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 
@@ -13,7 +14,19 @@ function formatTimestamp(date: Date): string {
   }).format(date)
 }
 
-export function DashboardHeader() {
+interface DashboardHeaderProps {
+  onRunScenario?: () => void
+  simLoading?: boolean
+  simActive?: boolean
+  onExitSimulation?: () => void
+}
+
+export function DashboardHeader({
+  onRunScenario,
+  simLoading = false,
+  simActive = false,
+  onExitSimulation,
+}: DashboardHeaderProps) {
   const [timestamp, setTimestamp] = useState("--:--:--")
 
   useEffect(() => {
@@ -39,6 +52,30 @@ export function DashboardHeader() {
           className="h-10 w-auto"
         />
         <div className="flex items-center gap-5">
+          {/* Simulation button */}
+          {simActive ? (
+            <button
+              onClick={onExitSimulation}
+              className="inline-flex items-center gap-1.5 rounded-md border border-red-500/45 bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:bg-red-500/25"
+            >
+              <X className="h-3.5 w-3.5" />
+              Exit Simulation
+            </button>
+          ) : (
+            <button
+              onClick={() => onRunScenario?.()}
+              disabled={simLoading}
+              className="inline-flex items-center gap-1.5 rounded-md border border-cyan-500/45 bg-cyan-500/15 px-3 py-1.5 text-xs font-semibold text-cyan-300 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {simLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Crosshair className="h-3.5 w-3.5" />
+              )}
+              {simLoading ? "Loading..." : "Run Simulation"}
+            </button>
+          )}
+
           <Badge variant="success" className="rounded-md px-3 py-1">
             RISK: LOW
           </Badge>
