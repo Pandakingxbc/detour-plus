@@ -24,11 +24,14 @@ const DEFAULT_CONSTRAINTS: PlannerConstraints = {
   horizonHours: 24,
 }
 
+type RiskLevel = "LOW" | "MED" | "HIGH"
+
 export function DashboardShell() {
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
   const [activePrimaryId, setActivePrimaryId] = useState<number | null>(25544)
+  const [headerRisk, setHeaderRisk] = useState<RiskLevel>("LOW")
   const [appliedConstraints, setAppliedConstraints] = useState<PlannerConstraints>(DEFAULT_CONSTRAINTS)
   const [manualSatelliteData, setManualSatelliteData] = useState<ManualSatelliteData | null>(null)
 
@@ -134,6 +137,7 @@ export function DashboardShell() {
       <div className="pointer-events-none absolute inset-x-0 top-0 z-20 p-6">
         <div className="pointer-events-auto mx-auto w-full max-w-[1600px]">
           <DashboardHeader
+            riskLevel={headerRisk}
             onRunScenario={handleRunScenario}
             simLoading={simLoading}
             simActive={simActive}
@@ -164,7 +168,11 @@ export function DashboardShell() {
             icon={Activity}
             title="Target + Live Feed"
           >
-            <LeftPanelContent onPrimaryIdChange={setActivePrimaryId} activePrimaryId={activePrimaryId} />
+            <LeftPanelContent
+              onPrimaryIdChange={setActivePrimaryId}
+              activePrimaryId={activePrimaryId}
+              onRiskChange={setHeaderRisk}
+            />
           </SidePanel>
 
           <div className="hidden lg:block lg:col-start-2 lg:row-start-1" />

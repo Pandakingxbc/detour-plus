@@ -40,6 +40,7 @@ interface FeedResponse {
 interface LeftPanelContentProps {
   onPrimaryIdChange?: (id: number) => void
   activePrimaryId?: number | null
+  onRiskChange?: (risk: FeedEvent["risk"]) => void
 }
 
 function formatUtc(isoValue?: string | null): string {
@@ -72,7 +73,13 @@ function riskClassName(risk: FeedEvent["risk"]): string {
   return "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
 }
 
-export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId }: LeftPanelContentProps) {
+function highestRiskFromEvents(events: FeedEvent[]): FeedEvent["risk"] {
+  if (events.some((event) => event.risk === "HIGH")) return "HIGH"
+  if (events.some((event) => event.risk === "MED")) return "MED"
+  return "LOW"
+}
+
+export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId, onRiskChange }: LeftPanelContentProps) {
   const [inputNorad, setInputNorad] = useState(DEFAULT_NORAD)
   const [activeNorad, setActiveNorad] = useState<number | null>(null)
 
@@ -108,6 +115,7 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId }: LeftPan
 
       const data = (await response.json()) as FeedResponse
       setFeed(data)
+      onRiskChange?.(highestRiskFromEvents(data.events))
       if (!data.events.length) {
         setToastMessage(noradId === -1
           ? "No debris threats detected for manual satellite."
@@ -115,12 +123,12 @@ export function LeftPanelContent({ onPrimaryIdChange, activePrimaryId }: LeftPan
       }
     } catch (err) {
       setFeed(null)
+      onRiskChange?.("LOW")
       setToastMessage(err instanceof Error ? err.message : "Live conjunction feed unavailable.")
-      console.error("Feed load error:", err)
     } finally {
       setFeedLoading(false)
     }
-  }, [])
+  }, [onRiskChange])
 
   const loadTarget = useCallback(
     async (noradId: number) => {

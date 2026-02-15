@@ -6,6 +6,8 @@ import { Crosshair, Loader2, X } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 
+type RiskLevel = "LOW" | "MED" | "HIGH"
+
 function formatTimestamp(date: Date): string {
   return new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
@@ -15,13 +17,25 @@ function formatTimestamp(date: Date): string {
 }
 
 interface DashboardHeaderProps {
+  riskLevel?: RiskLevel
   onRunScenario?: () => void
   simLoading?: boolean
   simActive?: boolean
   onExitSimulation?: () => void
 }
 
+function riskBadgeClassName(riskLevel: RiskLevel): string {
+  if (riskLevel === "HIGH") {
+    return "border-red-500/55 bg-red-500/20 text-red-300"
+  }
+  if (riskLevel === "MED") {
+    return "border-amber-500/55 bg-amber-500/20 text-amber-200"
+  }
+  return "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+}
+
 export function DashboardHeader({
+  riskLevel = "LOW",
   onRunScenario,
   simLoading = false,
   simActive = false,
@@ -52,7 +66,6 @@ export function DashboardHeader({
           className="h-10 w-auto"
         />
         <div className="flex items-center gap-5">
-          {/* Simulation button */}
           {simActive ? (
             <button
               onClick={onExitSimulation}
@@ -76,8 +89,8 @@ export function DashboardHeader({
             </button>
           )}
 
-          <Badge variant="success" className="rounded-md px-3 py-1">
-            RISK: LOW
+          <Badge variant="outline" className={`rounded-md px-3 py-1 ${riskBadgeClassName(riskLevel)}`}>
+            RISK: {riskLevel}
           </Badge>
           <p className="text-sm text-muted-foreground">
             Last updated:{" "}
