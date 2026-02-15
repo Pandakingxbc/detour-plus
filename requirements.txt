@@ -7,3 +7,9 @@ uvicorn[standard]>=0.27
 httpx>=0.26
 python-dotenv>=1.0
 pydantic>=2.5
+
+# ── LangChain / LangGraph (Nemotron agent system) ──
+langchain>=0.3
+langchain-openai>=0.3
+langchain-core>=0.3
+langgraph>=0.2
