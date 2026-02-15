@@ -1,7 +1,7 @@
 import type { NextConfig } from "next"
 
 const AGENT_BACKEND = process.env.AGENT_API_URL ?? "https://detour-backend.keanuc.net"
-const LLM_BACKEND = process.env.LLM_API_URL ?? "https://detour.keanuc.net"
+const LLM_BACKEND = process.env.LLM_API_URL ?? "https://detour-ai.keanuc.net"
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,

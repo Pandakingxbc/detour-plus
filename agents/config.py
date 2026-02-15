@@ -36,7 +36,7 @@ from typing import Optional
 class LLMConfig:
     """Configuration for the LLM backend."""
     # Endpoint
-    base_url: str = "https://detour.keanuc.net/v1"
+    base_url: str = "https://detour-ai.keanuc.net/v1"
     api_key: str = "not-needed"
     model: str = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"
 
@@ -53,7 +53,7 @@ class LLMConfig:
     def from_env(cls) -> "LLMConfig":
         """Build config from environment variables."""
         return cls(
-            base_url=os.getenv("NEMOTRON_BASE_URL", "https://detour.keanuc.net/v1"),
+            base_url=os.getenv("NEMOTRON_BASE_URL", "https://detour-ai.keanuc.net/v1"),
             api_key=os.getenv("NEMOTRON_API_KEY", "not-needed"),
             model=os.getenv("NEMOTRON_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"),
             temperature=float(os.getenv("NEMOTRON_TEMPERATURE", "0.3")),
@@ -80,7 +80,7 @@ class LLMConfig:
 
 # Quick presets
 LOCAL_GX10 = LLMConfig(
-    base_url="https://detour.keanuc.net/v1",
+    base_url="https://detour-ai.keanuc.net/v1",
     model="nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4",
 )
 
