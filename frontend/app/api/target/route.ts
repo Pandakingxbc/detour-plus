@@ -47,7 +47,8 @@ export async function GET(request: NextRequest) {
       orbitClass,
       altitudeKm: Number(state.altKm.toFixed(3)),
       inclinationDeg: inclinationDeg !== null ? Number(inclinationDeg.toFixed(3)) : null,
-      lastUpdatedUtc: targetEntry.fetchedAtUtc,
+      lastUpdatedUtc: now.toISOString(),
+      tleUpdatedUtc: targetEntry.fetchedAtUtc,
       tle: {
         line1: target.line1,
         line2: target.line2,

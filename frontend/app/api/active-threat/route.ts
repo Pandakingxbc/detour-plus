@@ -3,8 +3,10 @@ import { NextRequest, NextResponse } from "next/server"
 import {
   DEFAULT_FEED_HORIZON_HOURS,
   DEFAULT_FEED_MAX_EVENTS,
+  DEFAULT_ORBIT_CLASSES,
   DEFAULT_FEED_STEP_SEC,
   MAX_DEBRIS_OBJECTS,
+  parseOrbitClasses,
 } from "@/lib/server/config"
 import { getActiveThreat } from "@/lib/server/feed"
 
@@ -34,6 +36,7 @@ export async function GET(request: NextRequest) {
   const stepSec = parsePositive(params.get("stepSec"), DEFAULT_FEED_STEP_SEC)
   const maxEvents = parsePositive(params.get("maxEvents"), DEFAULT_FEED_MAX_EVENTS)
   const debrisLimit = parsePositive(params.get("debrisLimit"), MAX_DEBRIS_OBJECTS)
+  const orbitClasses = parseOrbitClasses(params.get("orbitClasses") ?? undefined, DEFAULT_ORBIT_CLASSES)
 
   try {
     const event = await getActiveThreat({
@@ -42,6 +45,7 @@ export async function GET(request: NextRequest) {
       stepSec,
       maxEvents,
       debrisLimit,
+      orbitClasses,
     })
 
     return NextResponse.json({

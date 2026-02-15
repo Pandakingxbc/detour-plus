@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils"
 const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
 const DISPLAY_OBJECT_LIMIT = 900
 const DEBRIS_REFRESH_MS = 1000
+const DEBRIS_ORBIT_CLASSES = "LEO"
 
 interface DebrisObject {
   noradId: number
@@ -252,7 +253,7 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
       inFlight = true
 
       try {
-        const response = await fetch(`/api/debris?limit=${DISPLAY_OBJECT_LIMIT}`, {
+        const response = await fetch(`/api/debris?limit=${DISPLAY_OBJECT_LIMIT}&orbitClasses=${DEBRIS_ORBIT_CLASSES}`, {
           signal: controller.signal,
         })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)

@@ -31,6 +31,8 @@ export interface PropagatedPoint {
   altKm: number
 }
 
+export type OrbitClass = "LEO" | "MEO" | "GEO"
+
 export type RiskLabel = "LOW" | "MED" | "HIGH"
 
 export interface ConjunctionEvent {

@@ -14,6 +14,7 @@ interface TargetResponse {
   altitudeKm: number
   inclinationDeg: number | null
   lastUpdatedUtc: string
+  tleUpdatedUtc?: string
   tle: {
     line1: string
     line2: string

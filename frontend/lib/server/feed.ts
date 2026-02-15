@@ -2,15 +2,16 @@ import {
   DEFAULT_FEED_HORIZON_HOURS,
   DEFAULT_FEED_MAX_EVENTS,
   DEFAULT_FEED_STEP_SEC,
+  DEFAULT_ORBIT_CLASSES,
   FEED_CACHE_MS,
   HIGH_RISK_KM,
   MAX_DEBRIS_OBJECTS,
   MED_RISK_KM,
 } from "@/lib/server/config"
 import { getConstraints, getServerState } from "@/lib/server/state"
-import { distanceKm, propagateStateAt, satrecFromTle } from "@/lib/server/sgp4"
+import { distanceKm, orbitClassForAltitude, propagateStateAt, satrecFromTle } from "@/lib/server/sgp4"
 import { getDebrisTles, getTargetTle } from "@/lib/server/tle"
-import type { ConjunctionEvent, RiskLabel, TleObject } from "@/lib/server/types"
+import type { ConjunctionEvent, OrbitClass } from "@/lib/server/types"
 
 interface FeedOptions {
   noradId: number
@@ -18,6 +19,7 @@ interface FeedOptions {
   stepSec?: number
   maxEvents?: number
   debrisLimit?: number
+  orbitClasses?: OrbitClass[]
 }
 
 export interface FeedResponse {
@@ -27,13 +29,13 @@ export interface FeedResponse {
   events: ConjunctionEvent[]
 }
 
-function riskFromMissKm(missKm: number): RiskLabel {
+function riskFromMissKm(missKm: number): "LOW" | "MED" | "HIGH" {
   if (missKm < HIGH_RISK_KM) return "HIGH"
   if (missKm < MED_RISK_KM) return "MED"
   return "LOW"
 }
 
-function riskScore(risk: RiskLabel): number {
+function riskScore(risk: "LOW" | "MED" | "HIGH"): number {
   if (risk === "HIGH") return 3
   if (risk === "MED") return 2
   return 1
@@ -62,6 +64,7 @@ function cacheKey(options: Required<FeedOptions>): string {
     options.stepSec,
     options.maxEvents,
     options.debrisLimit,
+    options.orbitClasses.join(","),
   ].join(":")
 }
 
@@ -74,6 +77,7 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
     stepSec: clampPositiveInt(options.stepSec, DEFAULT_FEED_STEP_SEC),
     maxEvents: clampPositiveInt(options.maxEvents, DEFAULT_FEED_MAX_EVENTS),
     debrisLimit: Math.min(clampPositiveInt(options.debrisLimit, MAX_DEBRIS_OBJECTS), MAX_DEBRIS_OBJECTS),
+    orbitClasses: options.orbitClasses?.length ? Array.from(new Set(options.orbitClasses)) : DEFAULT_ORBIT_CLASSES,
   }
 
   const state = getServerState()
@@ -94,10 +98,6 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
     throw new Error(`Target TLE missing for NORAD ${normalized.noradId}`)
   }
 
-  const debrisPool = debrisEntry.objects
-    .filter((obj) => obj.noradId !== normalized.noradId)
-    .slice(0, normalized.debrisLimit)
-
   const generatedAt = new Date()
   const generatedAtMs = generatedAt.getTime()
   const totalSteps = Math.floor((normalized.horizonHours * 3600) / normalized.stepSec)
@@ -113,11 +113,29 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
     targetSeries.push(stateAt ? stateAt.eci : null)
   }
 
+  const allowedClasses = new Set(normalized.orbitClasses)
+  const debrisPool: Array<{ noradId: number; satrec: ReturnType<typeof satrecFromTle> }> = []
+
+  for (let idx = 0; idx < debrisEntry.objects.length; idx += 1) {
+    if (debrisPool.length >= normalized.debrisLimit) break
+
+    const candidate = debrisEntry.objects[idx]
+    if (candidate.noradId === normalized.noradId) continue
+
+    const satrec = satrecFromTle(candidate)
+    const currentState = propagateStateAt(satrec, generatedAt)
+    if (!currentState) continue
+
+    const orbitClass = orbitClassForAltitude(currentState.altKm)
+    if (!allowedClasses.has(orbitClass)) continue
+
+    debrisPool.push({ noradId: candidate.noradId, satrec })
+  }
+
   const events: ConjunctionEvent[] = []
 
   for (let idx = 0; idx < debrisPool.length; idx += 1) {
     const debris = debrisPool[idx]
-    const debrisSatrec = satrecFromTle(debris)
 
     let bestDistanceKm = Number.POSITIVE_INFINITY
     let bestStep = -1
@@ -126,7 +144,7 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
       const targetPos = targetSeries[step]
       if (!targetPos) continue
 
-      const debrisState = propagateStateAt(debrisSatrec, sampleTimes[step])
+      const debrisState = propagateStateAt(debris.satrec, sampleTimes[step])
       if (!debrisState) continue
 
       const missKm = distanceKm(targetPos, debrisState.eci)
@@ -175,8 +193,4 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
 export async function getActiveThreat(options: FeedOptions): Promise<ConjunctionEvent | null> {
   const feed = await buildConjunctionFeed(options)
   return chooseActiveThreat(feed.events)
-}
-
-export function pickDebrisSubset(objects: TleObject[], limit: number): TleObject[] {
-  return objects.slice(0, Math.min(limit, MAX_DEBRIS_OBJECTS))
 }
