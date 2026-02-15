@@ -38,8 +38,8 @@ export const DEFAULT_FEED_STEP_SEC = parsePositiveInt(process.env.DEFAULT_FEED_S
 export const DEFAULT_FEED_MAX_EVENTS = parsePositiveInt(process.env.DEFAULT_FEED_MAX_EVENTS, 8)
 export const DEFAULT_ORBIT_CLASSES = parseOrbitClasses(process.env.DEFAULT_ORBIT_CLASSES, ["LEO", "MEO"])
 
-export const HIGH_RISK_KM = Number(process.env.HIGH_RISK_KM ?? 1)
-export const MED_RISK_KM = Number(process.env.MED_RISK_KM ?? 2)
+export const HIGH_RISK_KM = Number(process.env.HIGH_RISK_KM ?? 3)
+export const MED_RISK_KM = Number(process.env.MED_RISK_KM ?? 10)
 
 export const CELESTRAK_TARGET_URL = "https://celestrak.org/NORAD/elements/gp.php"
 export const CELESTRAK_GROUP_URL = "https://celestrak.org/NORAD/elements/gp.php"
