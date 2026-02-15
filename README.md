@@ -115,4 +115,4 @@ In LEO, a debris collision can happen in minutes. You can't wait for the next gr
 - **Keanu** — Backend, AI Inference, Agent System
 - **Adit** — Data Science, Satellite Model, Agent Design
 - **Justyna** — Edge AI, Satellite Systems
-- **Ethan** — Frontend, 3D Visualization
+- **Ethan** — Edge AI, Simulator, 3D Visualization
