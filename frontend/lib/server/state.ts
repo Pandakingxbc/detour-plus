@@ -10,11 +10,25 @@ interface FeedCacheEntry {
   }
 }
 
+interface ManualSatelliteState {
+  position: number[]  // ECI [x,y,z] in meters
+  velocity: number[]  // ECI [vx,vy,vz] in m/s
+  epoch: string       // ISO timestamp when state was defined
+  epochMs: number     // Epoch in milliseconds
+  // Keep trajectory for visualization
+  trajectory: {
+    times: number[]
+    positions: number[][]
+    velocities: number[][]
+  }
+}
+
 interface DetourServerState {
   targetTles: Map<number, TleCacheEntry>
   debrisByGroup: Map<string, TleCacheEntry>
   feedByKey: Map<string, FeedCacheEntry>
   constraints: ConstraintsState
+  manualSatellite: ManualSatelliteState | null
 }
 
 declare global {
@@ -38,6 +52,7 @@ function createState(): DetourServerState {
     debrisByGroup: new Map<string, TleCacheEntry>(),
     feedByKey: new Map<string, FeedCacheEntry>(),
     constraints: buildInitialConstraints(),
+    manualSatellite: null,
   }
 }
 
@@ -60,4 +75,14 @@ export function updateConstraints(next: Omit<ConstraintsState, "updatedAtUtc">):
   }
   state.feedByKey.clear()
   return state.constraints
+}
+
+export function setManualSatellite(satellite: ManualSatelliteState | null): void {
+  const state = getServerState()
+  state.manualSatellite = satellite
+  state.feedByKey.clear()
+}
+
+export function getManualSatellite(): ManualSatelliteState | null {
+  return getServerState().manualSatellite
 }

@@ -127,3 +127,17 @@ class ManeuverSimulateRequest(BaseModel):
     burn_time_sec: float = 0.0
     window_sec: float = 7200.0
     check_secondary: bool = False
+
+
+class ManualSatelliteRequest(BaseModel):
+    altitude_km: float = Field(description="Altitude above Earth surface in km")
+    speed_mps: float = Field(description="Orbital speed in m/s")
+    inclination_deg: float = Field(default=0.0, description="Inclination in degrees (0=equatorial, 90=polar)")
+    raan_deg: float = Field(default=0.0, description="Right Ascension of Ascending Node in degrees (orbit orientation)")
+    duration_sec: float = Field(default=5400, description="Trajectory duration in seconds")
+    dt: float = Field(default=60, description="Timestep in seconds")
+
+
+class ManualManeuverRequest(BaseModel):
+    direction: str = Field(description="Maneuver direction: radial-out, radial-in, prograde, retrograde")
+    delta_v_magnitude: float = Field(description="Delta-v magnitude in m/s")

@@ -1,17 +1,21 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Canvas, useThree } from "@react-three/fiber"
+import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { Line, OrbitControls, Stars } from "@react-three/drei"
 import * as THREE from "three"
 
 import { geodeticToUnitVector } from "@/lib/geo"
 import { cn } from "@/lib/utils"
+import { SimulationOverlayV2 } from "@/components/simulation-overlay-v2"
+import type { SimEngine } from "@/lib/sim-engine"
 
 const TEXTURE_PATH = "/textures/earth/blue-marble-day.jpg"
-const DISPLAY_OBJECT_LIMIT = 900
+const DISPLAY_OBJECT_LIMIT = 2500
 const DEBRIS_REFRESH_MS = 1000
 const DEBRIS_ORBIT_CLASSES = "LEO"
+const ORBIT_REFRESH_MS = 30_000
+const TARGET_TICK_MS = 1000
 
 interface DebrisObject {
   noradId: number
@@ -37,6 +41,12 @@ interface OrbitResponse {
   timeStartUtc: string
   stepSec: number
   points: OrbitPoint[]
+}
+
+interface OrbitTrackState {
+  points: THREE.Vector3[]
+  timeStartMs: number
+  stepSec: number
 }
 
 function toVectorFromGeodetic(lat: number, lon: number, altKm: number): THREE.Vector3 | null {
@@ -163,10 +173,40 @@ function Atmosphere() {
   )
 }
 
-function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
+function StaticObjects({
+  positions,
+  simTimeRef,
+}: {
+  positions: THREE.Vector3[]
+  simTimeRef?: React.RefObject<number>
+}) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
+  const wasSimulating = useRef(false)
 
+  // Precompute per-debris drift: slow linear drift + oscillation
+  const driftData = useMemo(() => {
+    return positions.map((_pos, i) => {
+      const phi = i * 2.39996322  // golden angle
+      const theta = ((i * 1.61803) % 1.0) * Math.PI
+      // Linear drift speed — visible in short demo
+      const speed = 0.00004 + (i % 60) * 0.0000008
+      // Oscillation — large enough to see wobble
+      const oscAmp = 0.008 + (i % 40) * 0.0003
+      const oscFreq = 0.005 + (i % 50) * 0.00006
+      return {
+        dx: Math.cos(phi) * Math.sin(theta) * speed,
+        dy: Math.cos(theta) * speed * 0.4,
+        dz: Math.sin(phi) * Math.sin(theta) * speed,
+        ox: Math.cos(phi + 1.0) * oscAmp,
+        oy: Math.sin(theta + 1.0) * oscAmp * 0.4,
+        oz: Math.sin(phi + 2.0) * oscAmp,
+        freq: oscFreq,
+      }
+    })
+  }, [positions])
+
+  // Set initial positions
   useEffect(() => {
     const mesh = meshRef.current
     if (!mesh || positions.length === 0) return
@@ -180,6 +220,46 @@ function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
     mesh.instanceMatrix.needsUpdate = true
   }, [dummy, positions])
 
+  // Per-frame drift during simulation
+  useFrame(() => {
+    const mesh = meshRef.current
+    if (!mesh || positions.length === 0) return
+
+    const isSimulating = !!simTimeRef
+
+    // Reset positions when simulation ends
+    if (!isSimulating && wasSimulating.current) {
+      for (let i = 0; i < positions.length; i++) {
+        dummy.position.copy(positions[i])
+        dummy.scale.setScalar(0.0063)
+        dummy.updateMatrix()
+        mesh.setMatrixAt(i, dummy.matrix)
+      }
+      mesh.instanceMatrix.needsUpdate = true
+      wasSimulating.current = false
+      return
+    }
+
+    if (!isSimulating) return
+    wasSimulating.current = true
+
+    const t = simTimeRef.current
+    for (let i = 0; i < positions.length; i++) {
+      const pos = positions[i]
+      const d = driftData[i]
+      const osc = Math.sin(d.freq * t)
+      dummy.position.set(
+        pos.x + d.dx * t + d.ox * osc,
+        pos.y + d.dy * t + d.oy * osc,
+        pos.z + d.dz * t + d.oz * osc
+      )
+      dummy.scale.setScalar(0.0063)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = true
+  })
+
   if (positions.length === 0) return null
 
   return (
@@ -190,33 +270,48 @@ function StaticObjects({ positions }: { positions: THREE.Vector3[] }) {
   )
 }
 
-function OrbitTrack({ points }: { points: THREE.Vector3[] }) {
+function OrbitTrack({ points, isManual }: { points: THREE.Vector3[]; isManual?: boolean }) {
   if (points.length < 2) return null
 
   const linePoints = points.map((point) => [point.x, point.y, point.z] as [number, number, number])
+  const color = isManual ? "#10b981" : "#7dd3fc"
 
-  return <Line points={linePoints} color="#7dd3fc" transparent opacity={0.95} lineWidth={1.4} />
+  return <Line points={linePoints} color={color} transparent opacity={0.95} lineWidth={1.4} />
 }
 
-function TargetMarker({ point }: { point: THREE.Vector3 | null }) {
+function TargetMarker({ point, isManual }: { point: THREE.Vector3 | null; isManual?: boolean }) {
   if (!point) return null
+
+  const color = isManual ? "#10b981" : "#22d3ee"
 
   return (
     <mesh position={point}>
       <sphereGeometry args={[0.012, 14, 14]} />
-      <meshBasicMaterial color="#22d3ee" />
+      <meshBasicMaterial color={color} />
     </mesh>
   )
 }
 
-function Scene({ debrisPositions, orbitPoints }: { debrisPositions: THREE.Vector3[]; orbitPoints: THREE.Vector3[] }) {
+function Scene({
+  debrisPositions,
+  orbitPoints,
+  currentTargetPoint,
+  isManualSatellite,
+  simEngine,
+}: {
+  debrisPositions: THREE.Vector3[]
+  orbitPoints: THREE.Vector3[]
+  currentTargetPoint: THREE.Vector3 | null
+  isManualSatellite: boolean
+  simEngine?: SimEngine | null
+}) {
   const { camera } = useThree()
 
   useEffect(() => {
     camera.position.set(0, 0, 4)
   }, [camera])
 
-  const currentTargetPoint = orbitPoints[0] ?? null
+  const isRealtimeSim = !!simEngine
 
   return (
     <>
@@ -226,24 +321,49 @@ function Scene({ debrisPositions, orbitPoints }: { debrisPositions: THREE.Vector
       <Earth />
       <Graticule />
       <Atmosphere />
-      <OrbitTrack points={orbitPoints} />
-      <TargetMarker point={currentTargetPoint} />
-      {debrisPositions.length > 0 ? <StaticObjects positions={debrisPositions} /> : null}
+      {!isRealtimeSim && <OrbitTrack points={orbitPoints} isManual={isManualSatellite} />}
+      {!isRealtimeSim && <TargetMarker point={currentTargetPoint} isManual={isManualSatellite} />}
+      {debrisPositions.length > 0 && !isRealtimeSim ? <StaticObjects positions={debrisPositions} /> : null}
+      {simEngine && <SimulationOverlayV2 engine={simEngine} />}
       <OrbitControls enablePan enableZoom minDistance={1.5} maxDistance={20} enableDamping dampingFactor={0.05} />
     </>
   )
 }
 
+interface ManualSatelliteData {
+  times: number[]
+  positions: number[][]
+  velocities: number[][]
+}
+
 interface GlobeViewProps {
   compacted?: boolean
   noradId?: number | null
+  manualSatelliteData?: ManualSatelliteData | null
+  simEngine?: SimEngine | null
 }
 
-export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
+export function GlobeView({ compacted = false, noradId, manualSatelliteData, simEngine }: GlobeViewProps) {
   const [debrisPositions, setDebrisPositions] = useState<THREE.Vector3[]>([])
-  const [orbitPoints, setOrbitPoints] = useState<THREE.Vector3[]>([])
+  const [orbitTrack, setOrbitTrack] = useState<OrbitTrackState>({
+    points: [],
+    timeStartMs: Date.now(),
+    stepSec: 60,
+  })
+  const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now())
 
   useEffect(() => {
+    const interval = window.setInterval(() => {
+      setCurrentTimeMs(Date.now())
+    }, TARGET_TICK_MS)
+
+    return () => window.clearInterval(interval)
+  }, [])
+
+  // Debris loading — paused during simulation to avoid fighting with drift
+  useEffect(() => {
+    if (simEngine) return // Freeze debris positions during simulation
+
     const controller = new AbortController()
     let cancelled = false
     let inFlight = false
@@ -284,17 +404,62 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
       controller.abort()
       window.clearInterval(interval)
     }
-  }, [])
+  }, [simEngine])
 
   useEffect(() => {
     if (!noradId) {
-      setOrbitPoints([])
+      setOrbitTrack({
+        points: [],
+        timeStartMs: Date.now(),
+        stepSec: 60,
+      })
+      return
+    }
+
+    // Handle manual satellite
+    if (noradId === -1 && manualSatelliteData) {
+      const convertPositionToGeodetic = (pos: number[]) => {
+        const x = pos[0]
+        const y = pos[1]
+        const z = pos[2]
+        const r = Math.sqrt(x * x + y * y + z * z)
+        const lat = (Math.asin(z / r) * 180) / Math.PI
+        const lon = (Math.atan2(y, x) * 180) / Math.PI
+        const altKm = (r - 6371000) / 1000
+        return { lat, lon, altKm }
+      }
+
+      try {
+        const points = manualSatelliteData.positions
+          .map((pos: number[]) => {
+            const geodetic = convertPositionToGeodetic(pos)
+            return toVectorFromGeodetic(geodetic.lat, geodetic.lon, geodetic.altKm)
+          })
+          .filter((value: THREE.Vector3 | null): value is THREE.Vector3 => value !== null)
+
+        // Calculate proper timestep from trajectory data
+        const times = manualSatelliteData.times
+        const avgStep = times.length > 1 ? (times[times.length - 1] - times[0]) / (times.length - 1) : 30
+
+        setOrbitTrack({
+          points,
+          timeStartMs: Date.now(),
+          stepSec: avgStep,
+        })
+      } catch (error) {
+        console.error("Failed to process manual satellite:", error)
+      }
       return
     }
 
     const controller = new AbortController()
+    let cancelled = false
+    let inFlight = false
 
     const loadOrbit = async () => {
+      if (cancelled || inFlight) return
+      inFlight = true
+
       try {
         const response = await fetch(`/api/orbit?norad=${noradId}&minutes=180&stepSec=60`, {
           signal: controller.signal,
@@ -306,18 +471,51 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
           .map((point) => toVectorFromGeodetic(point.lat, point.lon, point.altKm))
           .filter((value): value is THREE.Vector3 => value !== null)
 
-        setOrbitPoints(points)
+        const parsedStartMs = Date.parse(payload.timeStartUtc)
+        const startMs = Number.isFinite(parsedStartMs) ? parsedStartMs : Date.now()
+
+        if (!cancelled) {
+          setOrbitTrack({
+            points,
+            timeStartMs: startMs,
+            stepSec: Math.max(10, Math.round(payload.stepSec || 60)),
+          })
+        }
       } catch {
-        setOrbitPoints([])
+        if (!cancelled) {
+          setOrbitTrack((previous) => ({ ...previous, points: [] }))
+        }
+      } finally {
+        inFlight = false
       }
     }
 
     void loadOrbit()
+    const interval = window.setInterval(() => {
+      void loadOrbit()
+    }, ORBIT_REFRESH_MS)
 
     return () => {
+      cancelled = true
       controller.abort()
+      window.clearInterval(interval)
     }
-  }, [noradId])
+  }, [noradId, manualSatelliteData])
+
+  const currentTargetPoint = useMemo(() => {
+    if (orbitTrack.points.length === 0) return null
+
+    const stepMs = orbitTrack.stepSec * 1000
+    if (!Number.isFinite(stepMs) || stepMs <= 0) return orbitTrack.points[0]
+
+    const elapsedMs = Math.max(0, currentTimeMs - orbitTrack.timeStartMs)
+    // Loop continuously by using modulo
+    const totalDurationMs = orbitTrack.points.length * stepMs
+    const loopedElapsedMs = totalDurationMs > 0 ? elapsedMs % totalDurationMs : 0
+    const index = Math.floor(loopedElapsedMs / stepMs) % orbitTrack.points.length
+
+    return orbitTrack.points[index] ?? orbitTrack.points[0]
+  }, [currentTimeMs, orbitTrack])
 
   return (
     <div
@@ -332,7 +530,13 @@ export function GlobeView({ compacted = false, noradId }: GlobeViewProps) {
         gl={{ antialias: true, alpha: false }}
         style={{ background: "#030303", width: "100%", height: "100%" }}
       >
-        <Scene debrisPositions={debrisPositions} orbitPoints={orbitPoints} />
+        <Scene
+          debrisPositions={debrisPositions}
+          orbitPoints={orbitTrack.points}
+          currentTargetPoint={currentTargetPoint}
+          isManualSatellite={noradId === -1}
+          simEngine={simEngine}
+        />
       </Canvas>
     </div>
   )

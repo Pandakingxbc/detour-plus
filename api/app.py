@@ -14,8 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import state
-from api.routes import objects, conjunctions, maneuvers, catalog, satellite_demo
-from api.routes import agent as agent_routes
+from api.routes import objects, conjunctions, maneuvers, catalog, agent, simulation
 
 # Load .env from project root
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
@@ -73,8 +72,8 @@ app.include_router(objects.router)
 app.include_router(conjunctions.router)
 app.include_router(maneuvers.router)
 app.include_router(catalog.router)
-app.include_router(agent_routes.router)
-app.include_router(satellite_demo.router)
+app.include_router(agent.router)
+app.include_router(simulation.router)
 
 
 @app.get("/api/health")
