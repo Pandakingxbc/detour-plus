@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Query
 
 from api import state
-from api.schemas import OrbitalObjectResponse, TrajectoryResponse
+from api.schemas import OrbitalObjectResponse, TrajectoryResponse, ManualSatelliteRequest
+from engine.models.satellite import Satellite
 from tools.propagate import propagate_orbits
 
 router = APIRouter(prefix="/api/objects", tags=["objects"])
@@ -83,4 +86,54 @@ async def get_trajectory(
         times=traj["times"],
         positions=traj["positions"],
         velocities=traj["velocities"],
+    )
+
+
+@router.post("/manual/trajectory", response_model=TrajectoryResponse)
+async def get_manual_trajectory(request: ManualSatelliteRequest):
+    """
+    Generate a perfect circular orbit at the given radius.
+    Speed parameter controls the orbital period.
+    """
+    import numpy as np
+    import math
+
+    radius_m = request.radius_km * 1000.0
+
+    # Calculate orbital period from speed: T = 2πr/v
+    circumference = 2 * math.pi * radius_m
+    period_sec = circumference / request.speed_mps if request.speed_mps > 0 else 5400.0
+
+    # Generate points for 2 complete orbits
+    num_orbits = 2
+    total_time = period_sec * num_orbits
+    num_points = int(total_time / request.dt)
+
+    times = []
+    positions = []
+    velocities = []
+
+    for i in range(num_points):
+        t = i * request.dt
+        angle = (t / period_sec) * 2 * math.pi  # radians
+
+        # Circular orbit in equatorial plane
+        x = radius_m * math.cos(angle)
+        y = radius_m * math.sin(angle)
+        z = 0.0
+
+        # Tangential velocity
+        vx = -request.speed_mps * math.sin(angle)
+        vy = request.speed_mps * math.cos(angle)
+        vz = 0.0
+
+        times.append(t)
+        positions.append([x, y, z])
+        velocities.append([vx, vy, vz])
+
+    return TrajectoryResponse(
+        norad_id=-1,
+        times=times,
+        positions=positions,
+        velocities=velocities,
     )
