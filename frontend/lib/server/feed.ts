@@ -70,7 +70,10 @@ interface FeedOptions {
   maxEvents?: number
   debrisLimit?: number
   orbitClasses?: OrbitClass[]
+  forceRefresh?: boolean
 }
+
+type NormalizedFeedOptions = Required<Omit<FeedOptions, "forceRefresh">>
 
 export interface FeedResponse {
   generatedAtUtc: string
@@ -107,7 +110,7 @@ function clampPositiveInt(value: number | undefined, fallback: number): number {
   return Math.max(1, Math.floor(value as number))
 }
 
-function cacheKey(options: Required<FeedOptions>): string {
+function cacheKey(options: NormalizedFeedOptions): string {
   return [
     options.noradId,
     options.horizonHours,
@@ -121,7 +124,7 @@ function cacheKey(options: Required<FeedOptions>): string {
 export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedResponse> {
   const constraints = getConstraints()
 
-  const normalized: Required<FeedOptions> = {
+  const normalized: NormalizedFeedOptions = {
     noradId: options.noradId,
     horizonHours: clampPositiveInt(options.horizonHours, constraints.horizonHours || DEFAULT_FEED_HORIZON_HOURS),
     stepSec: clampPositiveInt(options.stepSec, DEFAULT_FEED_STEP_SEC),
@@ -135,7 +138,7 @@ export async function buildConjunctionFeed(options: FeedOptions): Promise<FeedRe
   const nowMs = Date.now()
   const feedCacheMs = normalized.noradId === -1 ? 0 : FEED_CACHE_MS
   const cached = state.feedByKey.get(key)
-  if (cached && nowMs - cached.generatedAtMs < feedCacheMs) {
+  if (!options.forceRefresh && cached && nowMs - cached.generatedAtMs < feedCacheMs) {
     return cached.data
   }
 
