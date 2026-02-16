@@ -2,6 +2,10 @@
 
 **TreeHacks 2026 | NVIDIA Edge AI Track**
 
+**Devpost
+https://devpost.com/software/detour-64kpds?ref_content=user-portfolio&ref_feature=in_progress
+
+
 Detour is an autonomous collision-avoidance system that runs **on-board** a satellite using NVIDIA's Nemotron LLM on the ASUS Ascent GX10 (Grace Blackwell). A multi-agent LangGraph pipeline detects debris threats, assesses risk, plans maneuvers, validates safety constraints, and executes avoidance burns — all locally with zero ground-station latency.
 
 ## Architecture
