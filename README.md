@@ -2,7 +2,7 @@
 
 **TreeHacks 2026 | NVIDIA Edge AI Track**
 
-**Devpost
+**Devpost**
 https://devpost.com/software/detour-64kpds?ref_content=user-portfolio&ref_feature=in_progress
 
 
