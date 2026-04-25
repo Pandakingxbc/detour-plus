@@ -1,12 +1,25 @@
-# Detour — On-Board AI Agents Saving Satellites from Orbital Debris
+# DETOUR-Plus — Multi-Maneuver Satellite Collision Avoidance System
 
-**TreeHacks 2026 | NVIDIA Edge AI Track** — Honourable Mention Winner
+> **Extended from [DETOUR](https://github.com/keanucz/detour)** — TreeHacks 2026 Winner (NVIDIA Edge AI Track)
+>
+> **Extended by**: Yang Zhi (杨植) | Beijing Institute of Technology
 
-**Devpost**
-https://devpost.com/software/detour-64kpds?ref_content=user-portfolio&ref_feature=in_progress
+[![Demo Video](https://img.shields.io/badge/Demo-Video-red?style=for-the-badge&logo=youtube)](assets/demo.mp4)
+[![GitHub](https://img.shields.io/badge/GitHub-Pandakingxbc-blue?style=for-the-badge&logo=github)](https://github.com/Pandakingxbc/detour-plus)
 
+## What's New in DETOUR-Plus
 
-Detour is an autonomous collision-avoidance system that runs **on-board** a satellite using NVIDIA's Nemotron LLM on the ASUS Ascent GX10 (Grace Blackwell). A multi-agent LangGraph pipeline detects debris threats, assesses risk, plans maneuvers, validates safety constraints, and executes avoidance burns — all locally with zero ground-station latency.
+| Feature | Original DETOUR | DETOUR-Plus |
+|---------|----------------|-------------|
+| **Maneuver Planning** | Single threat, single burn | **Multi-threat, optimal sequence** |
+| **Secondary Detection** | No | **Yes** - Check for new conjunctions |
+| **Harmonic Analysis** | No | **Yes** - Orbital resonance detection |
+| **Agent Pipeline** | 5 agents | **6 agents** (+ Strategist) |
+| **Optimization** | Heuristic | **Fuel-constrained optimization** |
+
+---
+
+DETOUR-Plus is an autonomous collision-avoidance system that runs **on-board** a satellite. The multi-agent LangGraph pipeline detects debris threats, assesses risk, **plans optimal multi-maneuver sequences**, validates safety constraints, and executes avoidance burns.
 
 ## Architecture
 
@@ -114,9 +127,67 @@ Served locally via NGC vLLM container with tool-calling (`--enable-auto-tool-cho
 
 In LEO, a debris collision can happen in minutes. You can't wait for the next ground station pass.
 
+## DETOUR-Plus New Components
+
+### Multi-Impulse Optimizer (`engine/maneuver/multi_impulse.py`)
+
+Solves the multi-conjunction avoidance problem with fuel constraints:
+
+```
+Given: N conjunction threats at times [t1, t2, ..., tN]
+       Fuel budget F_max
+       Target miss distance D_target
+
+Find:  Optimal maneuver sequence [(t_burn_1, Δv_1), (t_burn_2, Δv_2), ...]
+
+Subject to:
+       Σ fuel_i ≤ F_max
+       |Δv_i| ≤ max_dv_per_burn
+       No secondary conjunctions created
+```
+
+### Harmonic Analysis (`engine/maneuver/harmonic_analysis.py`)
+
+Detects problematic orbital resonances:
+- **Orbital resonance detection**: n1/n2 = p/q for small integers
+- **Synodic period calculation**: Time between successive close approaches
+- **Recurrence prediction**: Will the conjunction geometry repeat?
+
+### Strategist Agent (NEW)
+
+```python
+STRATEGIST_TOOLS = [
+    plan_multi_maneuver_sequence,    # Optimal sequence planning
+    check_secondary_conjunctions,     # Safety verification
+    analyze_orbital_harmonics,        # Resonance detection
+    evaluate_maneuver_safety_score,   # Comprehensive scoring
+    get_multi_threat_summary,         # Threat overview
+]
+```
+
+## Quick Demo
+
+```bash
+# Activate environment
+conda activate detour
+cd /path/to/detour
+
+# Run core algorithm demo
+python demo_test.py
+
+# Run full agent pipeline
+python -m agents.run --demo "Scan for threats to ISS"
+```
+
 ## Team
 
+**Original DETOUR Team (TreeHacks 2026):**
 - **Justyna** — Frontend, 3D Visualization, UI/UX
 - **Ethan** — ASUS Ascent GX10 Setup, Simulation Logic
 - **Adit** — Satellite Data Feed, Simulation Logic
 - **Keanu** — Ascent GX10 vLLM Setup, LangChain NVIDIA Nemotron Agent System
+
+**DETOUR-Plus Extension:**
+- **Yang Zhi (杨植)** — Multi-maneuver optimization, Harmonic analysis, Strategist Agent
+  - M.S. in Artificial Intelligence, Beijing Institute of Technology
+  - Email: yangzhi0776@163.com
