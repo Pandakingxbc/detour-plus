@@ -42,11 +42,13 @@ from agents.tools import (
     PLANNER_TOOLS,
     SAFETY_TOOLS,
     SCOUT_TOOLS,
+    STRATEGIST_TOOLS,
     assess_risk,
     execute_maneuver_on_satellite,
     get_satellite_status,
     propagate_satellite_orbit,
 )
+from agents.prompts import STRATEGIST_PROMPT
 
 logger = logging.getLogger("detour.agents.graph")
 
@@ -346,6 +348,69 @@ def build_avoidance_graph(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# Strategic multi-maneuver mode
+# ─────────────────────────────────────────────────────────────────────────
+def build_strategic_graph(
+    config: Optional[LLMConfig] = None,
+    event_queue: Optional[queue_module.Queue] = None,
+) -> StateGraph:
+    """
+    Build a strategic multi-maneuver planning graph.
+
+    Pipeline: Scout → Analyst → Strategist → Safety → Ops Brief
+
+    The Strategist agent handles multi-conjunction scenarios with
+    optimal maneuver sequencing and secondary conjunction detection.
+    """
+    if config is None:
+        config = LLMConfig.from_env()
+
+    llm = ChatOpenAI(**config.to_llm_kwargs())
+
+    # Create agent nodes
+    scout_node = _create_agent_node(
+        llm, SCOUT_PROMPT, SCOUT_TOOLS, "scout", "scout_output", "analyst",
+        event_queue=event_queue,
+    )
+    analyst_node = _create_agent_node(
+        llm, ANALYST_PROMPT, ANALYST_TOOLS, "analyst", "analyst_output", "strategist",
+        event_queue=event_queue,
+    )
+    strategist_node = _create_agent_node(
+        llm, STRATEGIST_PROMPT, STRATEGIST_TOOLS, "strategist", "planner_output", "safety",
+        event_queue=event_queue,
+    )
+    safety_node = _create_agent_node(
+        llm, SAFETY_PROMPT, SAFETY_TOOLS, "safety", "safety_output", "ops_brief",
+        event_queue=event_queue,
+    )
+    OPS_BRIEF_TOOLS = [assess_risk, execute_maneuver_on_satellite, get_satellite_status, propagate_satellite_orbit]
+    ops_brief_node = _create_agent_node(
+        llm, OPS_BRIEF_PROMPT, OPS_BRIEF_TOOLS, "ops_brief", "ops_brief", None,
+        event_queue=event_queue,
+    )
+
+    # Build graph
+    graph = StateGraph(AgentState)
+
+    graph.add_node("scout", scout_node)
+    graph.add_node("analyst", analyst_node)
+    graph.add_node("strategist", strategist_node)
+    graph.add_node("safety", safety_node)
+    graph.add_node("ops_brief", ops_brief_node)
+
+    # Linear pipeline with strategist
+    graph.set_entry_point("scout")
+    graph.add_edge("scout", "analyst")
+    graph.add_edge("analyst", "strategist")
+    graph.add_edge("strategist", "safety")
+    graph.add_edge("safety", "ops_brief")
+    graph.add_edge("ops_brief", END)
+
+    return graph.compile()
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Single-agent mode (simpler, for quick testing)
 # ─────────────────────────────────────────────────────────────────────────
 def build_single_agent_graph(
@@ -395,7 +460,7 @@ Be concise and actionable. Satellite operators need clear decisions, not essays.
 def run_avoidance_pipeline(
     request: str,
     config: Optional[LLMConfig] = None,
-    mode: Literal["multi", "single"] = "multi",
+    mode: Literal["multi", "single", "strategic"] = "multi",
 ) -> Dict[str, Any]:
     """
     Run the collision avoidance agent pipeline.
@@ -403,13 +468,16 @@ def run_avoidance_pipeline(
     Args:
         request: natural language request from the operator
         config: LLM configuration (defaults to env vars)
-        mode: "multi" for 5-agent pipeline, "single" for single agent
+        mode: "multi" for 5-agent pipeline, "single" for single agent,
+              "strategic" for multi-maneuver planning with Strategist agent
 
     Returns:
         dict with ops_brief, events, and intermediate outputs
     """
     if mode == "multi":
         graph = build_avoidance_graph(config)
+    elif mode == "strategic":
+        graph = build_strategic_graph(config)
     else:
         graph = build_single_agent_graph(config)
 
@@ -439,7 +507,7 @@ def run_avoidance_pipeline(
 async def stream_avoidance_pipeline(
     request: str,
     config: Optional[LLMConfig] = None,
-    mode: Literal["multi", "single"] = "multi",
+    mode: Literal["multi", "single", "strategic"] = "multi",
 ):
     """
     Async generator that streams agent events as they happen.
@@ -452,6 +520,8 @@ async def stream_avoidance_pipeline(
 
     if mode == "multi":
         graph = build_avoidance_graph(config, event_queue=eq)
+    elif mode == "strategic":
+        graph = build_strategic_graph(config, event_queue=eq)
     else:
         graph = build_single_agent_graph(config, event_queue=eq)
 

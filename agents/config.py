@@ -67,15 +67,18 @@ class LLMConfig:
         context-window space remains after the input tokens.  This
         avoids 400 errors when accumulated agent context is large.
         """
-        return {
+        kwargs = {
             "base_url": self.base_url,
             "api_key": self.api_key,
             "model": self.model,
             "temperature": self.temperature,
-            "extra_body": {
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
         }
+        # Only add extra_body for Nemotron/vLLM endpoints
+        if "nemotron" in self.model.lower() or "nvidia" in self.base_url.lower():
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        return kwargs
 
 
 # Quick presets

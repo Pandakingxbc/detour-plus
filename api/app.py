@@ -75,7 +75,7 @@ def status():
         "satellite": {
             "norad_id": sat.norad_id,
             "name": sat.name,
-            "fuel_pct": round(sat.fuel_kg / sat.config.fuel_capacity * 100, 1),
+            "fuel_pct": round(sat.fuel_kg / sat.config.fuel_capacity_kg * 100, 1),
         },
         "llm": {
             "model": config.model,
